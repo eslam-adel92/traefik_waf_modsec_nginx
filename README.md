@@ -83,10 +83,21 @@ Below are comprehensive security tests performed on the WAF setup. Each test inc
 
 #### 5.1 Basic Connectivity Test
 ```bash
-# Should return 200 OK with whoami service information
+# Without Host header (should return 404 - this is expected)
+curl -i http://localhost:8000/
+
+# With Host header (should return 200 OK with whoami service information)
 curl -i -H "Host: whoami.localhost" http://localhost:8000/
 ```
-✅ Result: Returns 200 OK with proper security headers
+✅ Results:
+- Without Host header: Returns 404 (This is correct behavior - Traefik requires Host header for routing)
+- With Host header: Returns 200 OK with proper security headers
+
+Note: The Host header is required because Traefik uses virtual hosting to route requests. 
+The `whoami.localhost` host is defined in the service labels in `docker-compose.yaml`:
+```yaml
+traefik.http.routers.whoami.rule=Host(`whoami.localhost`)
+```
 
 #### 5.2 XSS Protection Tests
 ```bash
