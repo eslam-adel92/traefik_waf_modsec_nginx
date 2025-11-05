@@ -1,8 +1,8 @@
 version: '3.8'
 
 networks:
-  web:
-    external: true
+  webproxy:
+    # external: true
 
 volumes:
   modsec_audit:
@@ -26,7 +26,7 @@ services:
     security_opt:
       - no-new-privileges:true
     networks:
-      - web
+      - webproxy
     ports:
       - "8000:80"
       - "443:443"
@@ -58,7 +58,7 @@ services:
     container_name: modsecurity
     restart: unless-stopped
     networks:
-      - web
+      - webproxy
     environment:
       - PARANOIA=1
       - PROXY=1
@@ -84,7 +84,7 @@ services:
     container_name: whoami-app
     restart: unless-stopped
     networks:
-      - web
+      - webproxy
     labels:
       - traefik.enable=true
       - traefik.http.routers.whoami.rule=Host(`whoami.localhost`)
