@@ -1,26 +1,27 @@
-# Traefik with ModSecurity WAF
+# Traefik with ModSecurity WAF (Nginx)
 
-This project sets up a Web Application Firewall (WAF) using Traefik as a reverse proxy and ModSecurity for security rules. It's designed to protect your web applications from common attacks.
+This project sets up a Web Application Firewall (WAF) using Traefik as a reverse proxy and ModSecurity with Nginx for security rules. It's designed to protect your web applications from common attacks.
 
 ## What's Included
 
 - **Traefik (v3.5.4)**: Acts as the main gateway for web traffic
-- **ModSecurity**: Provides security rules to protect against attacks
-- **Core Rule Set (CRS)**: A set of security rules that protect against common web attacks
+- **ModSecurity-nginx**: Provides WAF capabilities through Nginx
+- **OWASP Core Rule Set (CRS)**: A set of security rules that protect against common web attacks
 
 ## Project Structure
 
 ```
-├── docker-compose.yaml       # Main configuration for all services
+├── docker-compose.yaml        # Main configuration for all services
 ├── modsec/
-│   ├── crs-setup.conf       # Core Rule Set configuration
-│   ├── modsec.conf         # ModSecurity main configuration
+│   ├── nginx.conf            # Nginx configuration
+│   ├── crs-setup.conf        # Core Rule Set configuration
+│   ├── modsec.conf          # ModSecurity main configuration
+│   ├── rules.conf           # Custom rules configuration
 │   └── data/
-│       └── audit/          # Security audit logs
+│       ├── audit/           # Security audit logs
+│       └── collections/     # ModSecurity persistent data
 └── traefik/
-    ├── traefik.yaml        # Main Traefik configuration
-    └── config/
-        └── dynamic.yaml    # Traefik dynamic configuration
+    └── traefik.yaml         # Traefik configuration
 ```
 
 ## How to Use
@@ -62,29 +63,33 @@ The WAF protects against:
 
 #### Traefik Configuration
 - Port 8000: Web traffic
-- Port 8080: Traefik dashboard (disabled by default for security)
-- Automatic HTTPS redirect
-- Security headers enabled
+- Port 8080: Traefik dashboard
+- Port 443: HTTPS traffic (optional)
+- ModSecurity plugin enabled
+- Security headers middleware
 
 #### ModSecurity Configuration
-- Paranoia Level: 3 (Strong security)
-- Anomaly Scoring: Enabled
-- Core Rule Set: v3.3.7
-- Audit logging: Enabled
+- Engine: ModSecurity-nginx
+- Paranoia Level: 1 (Configurable via environment variables)
+- Anomaly Scoring Thresholds:
+  - Inbound: 10
+  - Outbound: 5
+- Audit Logging: JSON format
+- Core Rule Set: Latest version via owasp/modsecurity-crs
 
 ### 5. Testing the Security
 
-You can test if the WAF is working by trying these (they should be blocked):
+Test the WAF protection with these commands (they should be blocked):
 
 ```bash
-# Try to access a sensitive file
-curl http://localhost:8000/.env
+# Test a normal request (should work)
+curl -H "Host: whoami.localhost" http://localhost:8000/
 
-# Try a basic SQL injection
-curl "http://localhost:8000/api/users?id=1%20OR%201=1"
+# Test XSS protection
+curl -H "Host: whoami.localhost" "http://localhost:8000/?q=<script>alert(1)</script>"
 
-# Try an XSS attack
-curl "http://localhost:8000/?q=<script>alert(1)</script>"
+# Test SQL injection protection
+curl -H "Host: whoami.localhost" "http://localhost:8000/?id=1' OR '1'='1"
 ```
 
 All these requests should be blocked with a 403 Forbidden response.
@@ -92,12 +97,30 @@ All these requests should be blocked with a 403 Forbidden response.
 ### 6. Customizing Rules
 
 To modify security rules:
-1. Edit `modsec/crs-setup.conf` for Core Rule Set settings
-2. Edit `modsec/modsec.conf` for ModSecurity main settings
-3. Restart containers to apply changes:
+1. Adjust environment variables in `docker-compose.yaml`:
+   - `PARANOIA`: Set paranoia level (1-4)
+   - `ANOMALY_INBOUND`: Inbound anomaly score threshold
+   - `ANOMALY_OUTBOUND`: Outbound anomaly score threshold
+2. Restart containers to apply changes:
    ```bash
    docker compose restart
    ```
+
+### 7. Viewing Logs
+
+To check ModSecurity audit logs:
+```bash
+docker logs modsecurity
+```
+
+### 8. Security Considerations
+
+For production use:
+1. Enable HTTPS with proper certificates
+2. Disable Traefik dashboard or secure it
+3. Adjust paranoia levels based on your security needs
+4. Regular monitoring of audit logs
+5. Keep Core Rule Set updated
 
 ### 7. Checking Logs
 
