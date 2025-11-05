@@ -240,9 +240,20 @@ docker compose logs modsecurity
 
 3. To check if WAF is working:
    ```bash
-   curl http://localhost:8000/
+   # Test basic connectivity (should return 404 without Host header)
+   curl -i http://localhost:8000/
+
+   # Test with proper Host header (should return 200 OK)
+   curl -i -H "Host: whoami.localhost" http://localhost:8000/
+
+   # Test WAF blocking (should return 403 Forbidden)
+   curl -i -H "Host: whoami.localhost" "http://localhost:8000/?q=<script>alert(1)</script>"
    ```
-   Should show a normal response for valid requests.
+
+   Expected results:
+   - First command: 404 (normal, as Host header is required)
+   - Second command: 200 OK with whoami service response
+   - Third command: 403 Forbidden (WAF blocks XSS attempt)
 
 ## Contributing
 
