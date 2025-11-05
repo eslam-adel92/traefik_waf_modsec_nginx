@@ -1,0 +1,107 @@
+version: '3.8'
+
+networks:
+  web:
+    external: true
+  # internal:
+  #   driver: bridge
+
+volumes:
+  modsec_audit:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${PWD}/modsec/data/audit
+      o: bind
+  modsec_data:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${PWD}/modsec/data/collections
+      o: bind
+
+services:
+  traefik:
+    image: traefik:v3.5.4
+    container_name: traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - web
+      # - internal
+    ports:
+      - "8000:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yaml:/etc/traefik/traefik.yaml:ro
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.traefik.loadbalancer.server.port=8080
+      - traefik.http.middlewares.modsecurity.plugin.modsecurity.modSecurityUrl=http://modsecurity:8080
+      - traefik.http.middlewares.modsecurity.plugin.modsecurity.maxBodySize=10485760
+      - traefik.http.middlewares.modsecurity.plugin.modsecurity.trustForwardHeader=true
+      # Security Headers
+      - traefik.http.middlewares.securityHeaders.headers.browserXssFilter=true
+      - traefik.http.middlewares.securityHeaders.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.securityHeaders.headers.forceSTSHeader=true
+      - traefik.http.middlewares.securityHeaders.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.securityHeaders.headers.stsPreload=true
+      - traefik.http.middlewares.securityHeaders.headers.stsSeconds=31536000
+      - traefik.http.middlewares.securityHeaders.headers.customFrameOptionsValue=SAMEORIGIN
+      - traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.X-Content-Type-Options=nosniff
+      - traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.X-Frame-Options=DENY
+      - traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.X-Permitted-Cross-Domain-Policies=none
+      - traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.Referrer-Policy=strict-origin-when-cross-origin
+
+  modsecurity:
+    image: owasp/modsecurity-crs:nginx
+    container_name: modsecurity
+    restart: unless-stopped
+    networks:
+      - web
+    environment:
+      - PARANOIA=1
+      - ANOMALY_INBOUND=10
+      - ANOMALY_OUTBOUND=5
+      - BACKEND=http://whoami:80
+      - PORT=8080
+    volumes:
+      - ./modsec/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./modsec/modsec.conf:/etc/nginx/modsec/modsecurity.conf:ro
+      - ./modsec/crs-setup.conf:/etc/nginx/modsec/crs-setup.conf:ro
+      - ./modsec/rules.conf:/etc/nginx/modsec/rules.conf:ro
+      - ./modsec/data/audit:/var/log/modsec:rw
+      - ./modsec/data/collections:/tmp/modsecurity/data:rw
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - "traefik.enable=true"
+
+  dummy:
+    image: traefik/whoami:v1.10.1
+
+  whoami:
+    image: traefik/whoami:v1.10.1
+    container_name: whoami-app
+    restart: unless-stopped
+    networks:
+      - web
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.website.rule=PathPrefix(`/`)
+      - traefik.http.routers.website.middlewares=modsecurity@docker,securityHeaders@docker
+      - traefik.http.routers.website.entrypoints=web
+      # - "traefik.http.services.whoami.loadbalancer.server.port=80"
+      # - "traefik.http.middlewares.-waf-docker.forwardauth.address=http://modsecurity:80"
+      # - "traefik.http.middlewares.modsecurity-waf.forwardauth.trustForwardHeader=true"

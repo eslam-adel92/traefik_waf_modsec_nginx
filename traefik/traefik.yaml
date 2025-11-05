@@ -1,0 +1,36 @@
+global:
+  checkNewVersion: true
+  sendAnonymousUsage: false
+api:
+  dashboard: true
+  insecure: true # Disable this in production! Use a secure router instead.
+  debug: true
+log:
+  level: DEBUG
+
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false # Only expose containers with explicit `traefik.enable=true`
+    network: web
+
+experimental:
+  plugins:
+    modsecurity:
+      moduleName: "github.com/acouvreur/traefik-modsecurity-plugin"
+      version: "v1.3.0"
+
+
+# certificatesResolvers:
+#   letsencrypt:
+#     acme:
+#       email: your-email@example.com
+#       storage: /etc/traefik/acme/acme.json
+#       httpChallenge:
+#         entryPoint: web
