@@ -90,7 +90,7 @@ services:
       - internal
     labels:
       - traefik.enable=true
-      - traefik.http.routers.whoami.rule=Host(`whoami.localhost`)
+      - traefik.http.routers.whoami.rule=PathPrefix(`/whoami`)
       - traefik.http.routers.whoami.entrypoints=web
       - traefik.http.routers.whoami.middlewares=modsecurity@docker,securityHeaders@docker
       - traefik.http.services.whoami.loadbalancer.server.port=80
