@@ -64,7 +64,7 @@ services:
     environment:
       - PARANOIA=1
       - PROXY=1
-      - BACKEND=http://whoami:80
+      # - BACKEND=http://whoami:80
       - PORT=8080
       - MODSEC_RULE_ENGINE=On
       - MODSEC_AUDIT_LOG=/var/log/modsec/audit.log
