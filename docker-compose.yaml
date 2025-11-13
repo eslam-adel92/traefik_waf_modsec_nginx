@@ -110,7 +110,7 @@ services:
     labels:
       - traefik.enable=true
       # - traefik.http.routers.whoami.rule=PathPrefix(`/whoami`)
-      - traefik.http.routers.whoami.entrypoints=web
+      - traefik.http.routers.whoami.entrypoints=websecure
       - traefik.http.routers.whoami.middlewares=modsecurity@docker,securityHeaders@docker
       - traefik.http.services.whoami.loadbalancer.server.port=80
 
@@ -125,7 +125,7 @@ services:
       - "traefik.enable=true"
       # This catches ANY request that's just an IP address
       - "traefik.http.routers.ip-block.rule=HostRegexp(`^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$`)"
-      - "traefik.http.routers.ip-block.entrypoints=web"
+      - "traefik.http.routers.ip-block.entrypoints=websecure"
       - "traefik.http.routers.ip-block.priority=1"
       - "traefik.http.routers.ip-block.service=ip-block-service"
       - "traefik.http.services.ip-block-service.loadbalancer.server.port=80"
