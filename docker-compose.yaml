@@ -64,7 +64,6 @@ services:
       - "traefik.http.middlewares.security-headers.headers.framedeny=true"
       - "traefik.http.middlewares.security-headers.headers.sslredirect=true"    
       - "traefik.http.middlewares.security-headers.headers.referrerpolicy=strict-origin-when-cross-origin"
-      - "traefik.http.middlewares.security-headers.headers.permittedcrossdomainpolicies=none"
 
 
   modsecurity:
