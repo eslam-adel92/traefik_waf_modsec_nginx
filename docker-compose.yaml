@@ -41,7 +41,7 @@ services:
     labels:
       - traefik.enable=true
       # Dashboard
-      # - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`)"  # CHANGE to your domain
+      # - "traefik.http.routers.dashboard.rule=Host(`traefik.displaypulse.com`)"  # CHANGE to your domain
       # - "traefik.http.routers.dashboard.service=api@internal"
       # - "traefik.http.routers.dashboard.entrypoints=websecure"
       # - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
@@ -87,10 +87,7 @@ services:
     volumes:
       - ./modsec/data/audit:/var/log/modsec/audit
       - ./modsec/data/collections:/tmp/modsecurity/data
-      # - ./modsec/nginx.conf:/etc/nginx/templates/conf.d/default.conf.template:ro
-      # - ./modsec/crs-setup.conf:/etc/modsecurity.d/owasp-crs/crs-setup.conf:ro
-      # - ./modsec/modsec.conf:/etc/modsecurity.d/modsecurity.conf:ro
-      # - ./modsec/rules.conf:/etc/modsecurity.d/rules/custom.conf:ro
+      - ./modsec/custom-rules.conf:/etc/modsecurity.d/owasp-crs/rules/custom-rules.conf:ro
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/"]
