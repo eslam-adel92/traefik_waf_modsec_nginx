@@ -74,22 +74,23 @@ services:
       - webproxy
       - internal
     environment:
-      - PARANOIA=1
-      - PROXY=1
+      - PARANOIA=${PARANOIA:-3}
+      - ANOMALY_INBOUND=${ANOMALY_INBOUND:-10}
+      - ANOMALY_OUTBOUND=${ANOMALY_OUTBOUND:-5}
       - BACKEND=http://whoami:80
-      - PORT=8080
-      - MODSEC_RULE_ENGINE=On
+      - BACKEND_WS=ws://whoami:80
+      - MODSEC_RULE_ENGINE=${MODSEC_RULE_ENGINE:-On}
       - MODSEC_AUDIT_LOG=/var/log/modsec/audit.log
       - MODSEC_AUDIT_LOG_FORMAT=JSON
       - MODSEC_AUDIT_LOG_TYPE=Serial
       - MODSEC_AUDIT_STORAGE=/var/log/modsec/audit/
     volumes:
-      - ./modsec/data/audit:/var/log/modsec:rw
-      - ./modsec/data/collections:/tmp/modsecurity/data:rw
-      - ./modsec/nginx.conf:/etc/nginx/templates/conf.d/default.conf.template:ro
-      - ./modsec/crs-setup.conf:/etc/modsecurity.d/owasp-crs/crs-setup.conf:ro
-      - ./modsec/modsec.conf:/etc/modsecurity.d/modsecurity.conf:ro
-      - ./modsec/rules.conf:/etc/modsecurity.d/rules/custom.conf:ro
+      - ./modsec/data/audit:/var/log/modsec/audit
+      - ./modsec/data/collections:/tmp/modsecurity/data
+      # - ./modsec/nginx.conf:/etc/nginx/templates/conf.d/default.conf.template:ro
+      # - ./modsec/crs-setup.conf:/etc/modsecurity.d/owasp-crs/crs-setup.conf:ro
+      # - ./modsec/modsec.conf:/etc/modsecurity.d/modsecurity.conf:ro
+      # - ./modsec/rules.conf:/etc/modsecurity.d/rules/custom.conf:ro
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/"]
