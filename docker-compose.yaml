@@ -40,6 +40,11 @@ services:
       - ./traefik/logs:/var/log/traefik
     labels:
       - traefik.enable=true
+      # Dashboard
+      # - "traefik.http.routers.dashboard.rule=Host(`traefik.localhost`)"  # CHANGE to your domain
+      # - "traefik.http.routers.dashboard.service=api@internal"
+      # - "traefik.http.routers.dashboard.entrypoints=websecure"
+      # - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
       - traefik.http.services.traefik.loadbalancer.server.port=8080
       - traefik.http.middlewares.modsecurity.plugin.modsecurity.modSecurityUrl=http://modsecurity:8080
       - traefik.http.middlewares.modsecurity.plugin.modsecurity.maxBodySize=10485760
@@ -56,6 +61,11 @@ services:
       - traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.X-Frame-Options=DENY
       - traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.X-Permitted-Cross-Domain-Policies=none
       - traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.Referrer-Policy=strict-origin-when-cross-origin
+      - "traefik.http.middlewares.security-headers.headers.framedeny=true"
+      - "traefik.http.middlewares.security-headers.headers.sslredirect=true"    
+      - "traefik.http.middlewares.security-headers.headers.referrerpolicy=strict-origin-when-cross-origin"
+      - "traefik.http.middlewares.security-headers.headers.permittedcrossdomainpolicies=none"
+
 
   modsecurity:
     image: owasp/modsecurity-crs:nginx

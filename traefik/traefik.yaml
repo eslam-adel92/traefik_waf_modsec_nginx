@@ -25,7 +25,7 @@ providers:
   docker:
     endpoint: "unix:///var/run/docker.sock"
     exposedByDefault: false
-    network: traefik
+    network: webproxy
 
   file:
     directory: /etc/traefik/dynamic
@@ -33,7 +33,7 @@ providers:
 
 experimental:
   plugins:
-    traefik-modsecurity-plugin:
+    modsecurity:
       moduleName: github.com/acouvreur/traefik-modsecurity-plugin
       version: v1.3.0
 
