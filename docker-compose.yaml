@@ -35,6 +35,9 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.yaml:/etc/traefik/traefik.yaml:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./traefik/letsencrypt:/letsencrypt  # NEW! For SSL certificates
+      - ./traefik/logs:/var/log/traefik
     labels:
       - traefik.enable=true
       - traefik.http.services.traefik.loadbalancer.server.port=8080
@@ -70,9 +73,15 @@ services:
       - MODSEC_AUDIT_LOG=/var/log/modsec/audit.log
       - MODSEC_AUDIT_LOG_FORMAT=JSON
       - MODSEC_AUDIT_LOG_TYPE=Serial
+      - MODSEC_AUDIT_STORAGE=/var/log/modsec/audit/
     volumes:
       - ./modsec/data/audit:/var/log/modsec:rw
       - ./modsec/data/collections:/tmp/modsecurity/data:rw
+      - ./modsec/nginx.conf:/etc/nginx/templates/conf.d/default.conf.template:ro
+      - ./modsec/crs-setup.conf:/etc/modsecurity.d/owasp-crs/crs-setup.conf:ro
+      - ./modsec/modsec.conf:/etc/modsecurity.d/modsecurity.conf:ro
+      - ./modsec/rules.conf:/etc/modsecurity.d/rules/custom.conf:ro
+
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/"]
       interval: 10s

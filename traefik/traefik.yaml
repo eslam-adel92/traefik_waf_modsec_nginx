@@ -3,34 +3,54 @@ global:
   sendAnonymousUsage: false
 api:
   dashboard: true
-  insecure: true # Disable this in production! Use a secure router instead.
-  debug: true
-log:
-  level: DEBUG
+  insecure: true
 
 entryPoints:
   web:
     address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  
   websecure:
     address: ":443"
+    http:
+      tls:
+        certResolver: letsencrypt
 
 providers:
   docker:
     endpoint: "unix:///var/run/docker.sock"
-    exposedByDefault: false # Only expose containers with explicit `traefik.enable=true`
-    network: webproxy
+    exposedByDefault: false
+    network: traefik
+
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
 
 experimental:
   plugins:
-    modsecurity:
-      moduleName: "github.com/acouvreur/traefik-modsecurity-plugin"
-      version: "v1.3.0"
+    traefik-modsecurity-plugin:
+      moduleName: github.com/acouvreur/traefik-modsecurity-plugin
+      version: v1.3.0
 
-
+# Let's Encrypt Certificate Configuration
 certificatesResolvers:
   letsencrypt:
     acme:
-      email: ea.cloudhost@gmail.com
-      storage: /etc/traefik/acme/acme.json
+      email: ea.cloudhost@gmail.com  # CHANGE THIS to your email
+      storage: /letsencrypt/acme.json
+      # Use staging for testing, comment out for production
+      # caServer: https://acme-staging-v02.api.letsencrypt.org/directory
       httpChallenge:
         entryPoint: web
+
+log:
+  level: INFO
+
+accessLog:
+  format: json
+  filePath: "/var/log/traefik/access.log"
