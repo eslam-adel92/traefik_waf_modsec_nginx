@@ -49,7 +49,7 @@ certificatesResolvers:
         entryPoint: web
 
 log:
-  level: INFO
+  level: WARN
 
 accessLog:
   format: json
