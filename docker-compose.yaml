@@ -92,7 +92,7 @@ services:
     volumes:
       - ./modsec/data/audit:/var/log/modsec/audit
       - ./modsec/data/collections:/tmp/modsecurity/data
-      - ./modsec/custom-rules.conf:/etc/modsecurity.d/owasp-crs/rules/custom-rules.conf:ro
+      - ./modsec/custom-rules.conf:/etc/modsecurity.d/owasp-crs/rules/100-custom-rules.conf:ro
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/"]
