@@ -92,7 +92,7 @@ services:
       - CLIENT_MAX_BODY_SIZE=300m
       - MODSEC_REQ_BODY_NOFILES_LIMIT=314572800
       - MODSEC_REQ_BODY_LIMIT=314572800
-      - MODSEC_RESP_BODY_MIMETYPE="text/plain text/html text/xml application/json"
+      # - MODSEC_RESP_BODY_MIMETYPE="text/plain text/html text/xml application/json"
     volumes:
       - ./modsec/data/audit:/var/log/modsec/audit
       - ./modsec/data/collections:/tmp/modsecurity/data
