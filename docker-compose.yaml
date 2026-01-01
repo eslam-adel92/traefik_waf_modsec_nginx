@@ -109,6 +109,7 @@ services:
         max-file: "2"
     labels:
       - traefik.enable=true
+      - traefik.http.routers.whoami.tls.certresolver=
 
   whoami:
     image: traefik/whoami:v1.10.1
@@ -127,6 +128,7 @@ services:
       # - traefik.http.routers.whoami.rule=PathPrefix(`/whoami`)
       - traefik.http.routers.whoami.entrypoints=websecure
       - traefik.http.routers.whoami.middlewares=modsecurity@docker,securityHeaders@docker
+      - traefik.http.routers.whoami.tls.certresolver=
       - traefik.http.services.whoami.loadbalancer.server.port=80
 
   ip-blocker:
@@ -148,4 +150,5 @@ services:
       - "traefik.http.routers.ip-block.entrypoints=websecure"
       - "traefik.http.routers.ip-block.priority=1"
       - "traefik.http.routers.ip-block.service=ip-block-service"
+      - "traefik.http.routers.ip-block.tls.certresolver="
       - "traefik.http.services.ip-block-service.loadbalancer.server.port=80"
