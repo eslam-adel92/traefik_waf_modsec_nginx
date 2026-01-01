@@ -52,7 +52,7 @@ services:
       # - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
       - traefik.http.services.traefik.loadbalancer.server.port=8080
       - traefik.http.middlewares.modsecurity.plugin.modsecurity.modSecurityUrl=http://modsecurity:8080
-      - traefik.http.middlewares.modsecurity.plugin.modsecurity.maxBodySize=10485760
+      - traefik.http.middlewares.modsecurity.plugin.modsecurity.maxBodySize=314572800
       - traefik.http.middlewares.modsecurity.plugin.modsecurity.trustForwardHeader=true
       # Security Headers
       - traefik.http.middlewares.securityHeaders.headers.browserXssFilter=true
@@ -89,10 +89,12 @@ services:
       - MODSEC_AUDIT_LOG_FORMAT=JSON
       - MODSEC_AUDIT_LOG_TYPE=Serial
       - MODSEC_AUDIT_STORAGE=/var/log/modsec/audit/
+      - CLIENT_MAX_BODY_SIZE=300m
     volumes:
       - ./modsec/data/audit:/var/log/modsec/audit
       - ./modsec/data/collections:/tmp/modsecurity/data
       - ./modsec/custom-rules.conf:/etc/modsecurity.d/owasp-crs/rules/100-custom-rules.conf:ro
+      - ./modsec/modsec.conf:/etc/modsecurity.d/modsecurity.conf
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/"]
