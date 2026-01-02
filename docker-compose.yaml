@@ -62,10 +62,10 @@ services:
       - "traefik.http.middlewares.securityHeaders.headers.stsPreload=true"
       - "traefik.http.middlewares.securityHeaders.headers.stsSeconds=31536000"
       - "traefik.http.middlewares.securityHeaders.headers.customFrameOptionsValue=SAMEORIGIN"
-      - traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.X-Content-Type-Options=nosniff
-      - traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.X-Frame-Options=DENY
-      - traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.X-Permitted-Cross-Domain-Policies=none
-      - traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.Referrer-Policy=strict-origin-when-cross-origin
+      - "traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.X-Content-Type-Options=nosniff"
+      - "traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.X-Frame-Options=DENY"
+      - "traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.X-Permitted-Cross-Domain-Policies=none"
+      - "traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.Referrer-Policy=strict-origin-when-cross-origin"
       - "traefik.http.middlewares.security-headers.headers.framedeny=true"
       - "traefik.http.middlewares.security-headers.headers.sslredirect=true"    
       - "traefik.http.middlewares.security-headers.headers.referrerpolicy=strict-origin-when-cross-origin"
