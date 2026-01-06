@@ -26,10 +26,10 @@ entryPoints:
       tls:
         certResolver: letsencrypt
 
-  serversTransport:
-    forwardingTimeouts:
-      dialTimeout: "300s"
-      responseHeaderTimeout: "300s"
+serversTransport:
+  forwardingTimeouts:
+    dialTimeout: "300s"
+    responseHeaderTimeout: "300s"
 
 providers:
   docker:
