@@ -17,9 +17,19 @@ entryPoints:
   
   websecure:
     address: ":443"
+    transport:
+      respondingTimeouts:
+        readTimeout: "300s"
+        writeTimeout: "0s" # No timeout for writes
+        idleTimeout: "300s"
     http:
       tls:
         certResolver: letsencrypt
+
+  serversTransport:
+    forwardingTimeouts:
+      dialTimeout: "300s"
+      responseHeaderTimeout: "300s"
 
 providers:
   docker:
