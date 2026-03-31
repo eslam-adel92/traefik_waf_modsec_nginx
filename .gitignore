@@ -1,1 +1,12 @@
 traefik/letsencrypt/acme.json
+traefik/letsencrypt/acme.json.bak
+traefik/letsencrypt/acme.json.old
+traefik/letsencrypt/acme.json.new
+.vscode/
+logs/
+*.log
+*.bak
+*.tmp
+*.swp
+*.swo
+*.DS_Store

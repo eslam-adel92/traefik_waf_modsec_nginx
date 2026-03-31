@@ -19,17 +19,17 @@ entryPoints:
     address: ":443"
     transport:
       respondingTimeouts:
-        readTimeout: "300s"
+        readTimeout: "600s"
         writeTimeout: "0s" # No timeout for writes
-        idleTimeout: "300s"
+        idleTimeout: "600s"
     http:
       tls:
         certResolver: letsencrypt
 
 serversTransport:
   forwardingTimeouts:
-    dialTimeout: "300s"
-    responseHeaderTimeout: "300s"
+    dialTimeout: "600s"
+    responseHeaderTimeout: "600s"
 
 providers:
   docker:
