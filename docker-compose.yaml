@@ -167,7 +167,16 @@ services:
     labels:
       - "traefik.enable=false"
 
-  # Always-200 upstream for the WAF's inspection request. Never routed.
+  # The WAF's upstream - NOT an application, despite using the same image as
+  # the demo backend below. The CRS container does `proxy_pass $BACKEND`, so it
+  # needs something that answers 200 to every path and method in order to
+  # produce a response for the plugin to read; with no upstream it would 502,
+  # and 502 >= 400 means the plugin would block every request.
+  #
+  # This must stay a separate service from whatever you are protecting. The
+  # plugin sends a copy here AND replays the original to the real service, so a
+  # shared backend executes every request twice. It sits on `internal` with no
+  # router, so it is unreachable from outside and never serves user traffic.
   waf-dummy:
     image: traefik/whoami:v1.11.0
     container_name: waf-dummy
