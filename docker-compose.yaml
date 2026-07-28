@@ -1,26 +1,16 @@
 networks:
-  internal:
-    driver: bridge
+  # Shared network Traefik uses to reach routed services. Created manually:
+  #   docker network create webproxy
+  # Your application stacks join this network and opt into the WAF via labels.
   webproxy:
     external: true
-
-volumes:
-  modsec_audit:
-    driver: local
-    driver_opts:
-      type: none
-      device: ${PWD}/modsec/data/audit
-      o: bind
-  modsec_data:
-    driver: local
-    driver_opts:
-      type: none
-      device: ${PWD}/modsec/data/collections
-      o: bind
+  # Private: Traefik -> WAF -> dummy upstream. No application traffic here.
+  internal:
+    driver: bridge
 
 services:
   traefik:
-    image: traefik:v3.6.6
+    image: traefik:v3.7.9
     container_name: traefik
     restart: unless-stopped
     security_opt:
@@ -31,72 +21,139 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "8085:8080"
+      # Dashboard: loopback only. api.insecure has NO authentication, so this
+      # must never be published on 0.0.0.0. Reach it over an SSH tunnel.
+      - "127.0.0.1:8085:8080"
     volumes:
+      # `:z` relabels for SELinux hosts (Fedora/RHEL); ignored elsewhere.
+      # The docker socket is deliberately NOT relabelled - that would alter a
+      # host system file. See README for the SELinux socket note.
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik/traefik.yaml:/etc/traefik/traefik.yaml:ro
-      - ./traefik/dynamic:/etc/traefik/dynamic:ro
-      - ./traefik/letsencrypt:/letsencrypt  # NEW! For SSL certificates
-      - ./traefik/logs:/var/log/traefik
+      - ./traefik/traefik.yaml:/etc/traefik/traefik.yaml:ro,z
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro,z
+      - ./traefik/letsencrypt:/letsencrypt:z
     logging:
       driver: "json-file"
       options:
-        max-size: "5m"
-        max-file: "2"
+        max-size: "10m"
+        max-file: "3"
     labels:
       - "traefik.enable=true"
-      # Dashboard
-      # - "traefik.http.routers.dashboard.rule=Host(`traefik.displaypulse.com`)"  # CHANGE to your domain
-      # - "traefik.http.routers.dashboard.service=api@internal"
-      # - "traefik.http.routers.dashboard.entrypoints=websecure"
-      - "traefik.http.routers.dashboard.tls.certresolver="
-      - "traefik.http.services.traefik.loadbalancer.server.port=8080"
+
+      # =====================================================================
+      # READY-MADE CHAINS - this is the repo's public interface.
+      # An application opts in with a single label:
+      #     traefik.http.routers.<name>.middlewares=waf@docker
+      # =====================================================================
+      - "traefik.http.middlewares.waf.chain.middlewares=ratelimit@docker,inflight@docker,cors@docker,modsecurity@docker,securityHeaders@docker"
+      # For large-upload routes: same protection, bigger body budget, much
+      # tighter concurrency. See README "Large uploads".
+      - "traefik.http.middlewares.waf-uploads.chain.middlewares=ratelimit@docker,inflight-uploads@docker,cors@docker,modsecurity-large@docker,securityHeaders@docker"
+
+      # ---- L7 flood control ----------------------------------------------
+      # Ordered FIRST in the chains above so floods are dropped before paying
+      # for the WAF round-trip. Counted per client IP.
+      - "traefik.http.middlewares.ratelimit.ratelimit.average=${RATE_LIMIT_AVERAGE:-100}"
+      - "traefik.http.middlewares.ratelimit.ratelimit.burst=${RATE_LIMIT_BURST:-200}"
+      - "traefik.http.middlewares.ratelimit.ratelimit.period=${RATE_LIMIT_PERIOD:-1s}"
+      # Behind Cloudflare/another proxy, uncomment so the real client IP is
+      # used instead of the proxy's, or every request counts against one IP:
+      # - "traefik.http.middlewares.ratelimit.ratelimit.sourcecriterion.ipstrategy.depth=1"
+
+      # Concurrent in-flight requests per IP. This is what bounds slowloris:
+      # a slow client can hold a connection open, but only this many.
+      - "traefik.http.middlewares.inflight.inflightreq.amount=${INFLIGHT_LIMIT:-50}"
+      - "traefik.http.middlewares.inflight-uploads.inflightreq.amount=${UPLOAD_INFLIGHT_LIMIT:-4}"
+
+      # ---- WAF ------------------------------------------------------------
+      # Sends a COPY of each request to the modsecurity container. >=400 blocks.
+      # The plugin buffers the whole body IN MEMORY, so maxBodySize is a
+      # per-request memory cost: worst case is roughly
+      #   maxBodySize x INFLIGHT_LIMIT x (number of client IPs).
       - "traefik.http.middlewares.modsecurity.plugin.modsecurity.modSecurityUrl=http://modsecurity:8080"
-      - "traefik.http.middlewares.modsecurity.plugin.modsecurity.maxBodySize=314572800"
-      - "traefik.http.middlewares.modsecurity.plugin.modsecurity.trustForwardHeader=true"
-      # Security Headers
-      - "traefik.http.middlewares.securityHeaders.headers.browserXssFilter=true"
+      - "traefik.http.middlewares.modsecurity.plugin.modsecurity.maxBodySize=${WAF_MAX_BODY_SIZE:-20971520}"
+      # Must exceed the time to push maxBodySize to the WAF. The plugin's own
+      # default is 2000ms, which fails instantly on anything large.
+      - "traefik.http.middlewares.modsecurity.plugin.modsecurity.timeoutMillis=${WAF_TIMEOUT_MILLIS:-60000}"
+
+      - "traefik.http.middlewares.modsecurity-large.plugin.modsecurity.modSecurityUrl=http://modsecurity:8080"
+      - "traefik.http.middlewares.modsecurity-large.plugin.modsecurity.maxBodySize=${WAF_UPLOAD_MAX_BODY_SIZE:-314572800}"
+      - "traefik.http.middlewares.modsecurity-large.plugin.modsecurity.timeoutMillis=${WAF_UPLOAD_TIMEOUT_MILLIS:-600000}"
+
+      # ---- CORS -----------------------------------------------------------
+      # Runs before the WAF: Traefik answers preflight itself and never
+      # forwards it, so an OPTIONS preflight can't be 403'd by ModSecurity.
+      - "traefik.http.middlewares.cors.headers.accessControlAllowOriginList=${CORS_ALLOW_ORIGIN:-*}"
+      - "traefik.http.middlewares.cors.headers.accessControlAllowMethods=${CORS_ALLOW_METHODS:-GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS}"
+      - "traefik.http.middlewares.cors.headers.accessControlAllowHeaders=${CORS_ALLOW_HEADERS:-Content-Type,Authorization,X-Requested-With,X-CSRF-TOKEN,X-XSRF-TOKEN}"
+      - "traefik.http.middlewares.cors.headers.accessControlMaxAge=86400"
+      - "traefik.http.middlewares.cors.headers.addVaryHeader=true"
+
+      # ---- Security headers -----------------------------------------------
       - "traefik.http.middlewares.securityHeaders.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.securityHeaders.headers.frameDeny=true"
       - "traefik.http.middlewares.securityHeaders.headers.forceSTSHeader=true"
       - "traefik.http.middlewares.securityHeaders.headers.stsIncludeSubdomains=true"
       - "traefik.http.middlewares.securityHeaders.headers.stsPreload=true"
       - "traefik.http.middlewares.securityHeaders.headers.stsSeconds=31536000"
-      - "traefik.http.middlewares.securityHeaders.headers.customFrameOptionsValue=SAMEORIGIN"
-      - "traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.X-Content-Type-Options=nosniff"
-      - "traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.X-Frame-Options=DENY"
+      - "traefik.http.middlewares.securityHeaders.headers.referrerPolicy=strict-origin-when-cross-origin"
       - "traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.X-Permitted-Cross-Domain-Policies=none"
-      - "traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.Referrer-Policy=strict-origin-when-cross-origin"
-      - "traefik.http.middlewares.security-headers.headers.framedeny=true"
-      - "traefik.http.middlewares.security-headers.headers.sslredirect=true"    
-      - "traefik.http.middlewares.security-headers.headers.referrerpolicy=strict-origin-when-cross-origin"
+      # X-XSS-Protection is deprecated; "0" is the modern recommendation.
+      - "traefik.http.middlewares.securityHeaders.headers.customResponseHeaders.X-XSS-Protection=0"
 
-
+  # The WAF. Only Traefik talks to it, so it stays off the shared network.
   modsecurity:
-    image: owasp/modsecurity-crs:nginx
+    image: owasp/modsecurity-crs:4.28-nginx-alpine-202607160307
     container_name: modsecurity
     restart: unless-stopped
     networks:
-      - webproxy
       - internal
     environment:
-      - PARANOIA=${PARANOIA:-3}
+      # BLOCKING_PARANOIA replaces the deprecated PARANOIA variable.
+      - BLOCKING_PARANOIA=${PARANOIA:-2}
       - ANOMALY_INBOUND=${ANOMALY_INBOUND:-10}
       - ANOMALY_OUTBOUND=${ANOMALY_OUTBOUND:-5}
-      - BACKEND=http://whoami:80
-      - BACKEND_WS=ws://whoami:80
       - MODSEC_RULE_ENGINE=${MODSEC_RULE_ENGINE:-On}
-      - MODSEC_AUDIT_LOG=/var/log/modsec/audit.log
+
+      # CRS 911100 rejects any method not listed here with a 403, which a
+      # browser surfaces as a CORS error. REST APIs need PUT/PATCH/DELETE.
+      - ALLOWED_METHODS=${ALLOWED_METHODS:-GET HEAD POST PUT PATCH DELETE OPTIONS}
+
+      # Make WAF blocks visible to browsers instead of masquerading as CORS
+      # failures: the plugin copies these headers onto the 403 it returns.
+      - CORS_HEADER_403_ALLOW_ORIGIN=${CORS_ALLOW_ORIGIN:-*}
+      - CORS_HEADER_403_ALLOW_METHODS=${CORS_ALLOW_METHODS:-GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS}
+      - CORS_HEADER_ACCESS_CONTROL_ALLOW_HEADERS=${CORS_ALLOW_HEADERS:-Content-Type,Authorization,X-Requested-With,X-CSRF-TOKEN,X-XSRF-TOKEN}
+
+      # Dummy upstream. The WAF must NOT proxy to a real app: the plugin
+      # replays the request to the real service afterwards, so pointing
+      # BACKEND at an app executes every request twice.
+      - BACKEND=http://waf-dummy:80
+      - BACKEND_WS=ws://waf-dummy:80
+
+      # Audit log to stdout as JSON -> `docker compose logs modsecurity`,
+      # rotated by the json-file driver. A bind-mounted host directory does
+      # not work here: nginx runs as uid 101 and cannot write it.
+      - MODSEC_AUDIT_LOG=/dev/stdout
       - MODSEC_AUDIT_LOG_FORMAT=JSON
       - MODSEC_AUDIT_LOG_TYPE=Serial
-      - MODSEC_AUDIT_STORAGE=/var/log/modsec/audit/
-      - CLIENT_MAX_BODY_SIZE=300m
-      - MODSEC_REQ_BODY_NOFILES_LIMIT=314572800
-      - MODSEC_REQ_BODY_LIMIT=314572800
-      - MODSEC_RESP_BODY_MIMETYPE=text/plain text/html text/xml application/json
+      - MODSEC_AUDIT_ENGINE=RelevantOnly
+
+      # Response-body inspection is impossible in this architecture: the real
+      # response never passes through ModSecurity, only the dummy's does.
+      # Leaving it off also saves CPU on every request.
+      - MODSEC_RESP_BODY_ACCESS=Off
+
+      # Must cover the largest body any chain accepts (the uploads chain).
+      - CLIENT_MAX_BODY_SIZE=${WAF_UPLOAD_MAX_BODY_SIZE:-314572800}
+      - MODSEC_REQ_BODY_LIMIT=${WAF_UPLOAD_MAX_BODY_SIZE:-314572800}
+      - MODSEC_REQ_BODY_NOFILES_LIMIT=${WAF_UPLOAD_MAX_BODY_SIZE:-314572800}
     volumes:
-      - ./modsec/data/audit:/var/log/modsec/audit
-      - ./modsec/data/collections:/tmp/modsecurity/data
-      - ./modsec/custom-rules.conf:/etc/modsecurity.d/owasp-crs/rules/100-custom-rules.conf:ro
+      # Mounted on the CRS "*-after.conf" hook, included AFTER the CRS rules.
+      # This matters: ctl:ruleRemoveById resolves at parse time, so a file
+      # loaded before CRS (e.g. rules/100-custom-rules.conf) cannot exclude a
+      # CRS rule - the rule does not exist yet and the ctl is a silent no-op.
+      - ./modsec/custom-rules.conf:/etc/modsecurity.d/owasp-crs/plugins/custom-after.conf:ro,z
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/"]
       interval: 10s
@@ -105,18 +162,17 @@ services:
     logging:
       driver: "json-file"
       options:
-        max-size: "5m"
-        max-file: "2"
+        max-size: "10m"
+        max-file: "3"
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.whoami.tls.certresolver="
+      - "traefik.enable=false"
 
-  whoami:
-    image: traefik/whoami:v1.10.1
-    container_name: whoami-app
+  # Always-200 upstream for the WAF's inspection request. Never routed.
+  waf-dummy:
+    image: traefik/whoami:v1.11.0
+    container_name: waf-dummy
     restart: unless-stopped
     networks:
-      - webproxy
       - internal
     logging:
       driver: "json-file"
@@ -124,18 +180,16 @@ services:
         max-size: "5m"
         max-file: "2"
     labels:
-      - "traefik.enable=true"
-      # - traefik.http.routers.whoami.rule=PathPrefix(`/whoami`)
-      - "traefik.http.routers.whoami.entrypoints=websecure"
-      - "traefik.http.routers.whoami.middlewares=modsecurity@docker,securityHeaders@docker"
-      - "traefik.http.routers.whoami.tls.certresolver="
-      - "traefik.http.services.whoami.loadbalancer.server.port=80"
+      - "traefik.enable=false"
 
+  # Catch-all: refuse requests that hit a bare IP instead of a hostname.
+  # HostRegexp yields no concrete domain, so Traefik requests no ACME
+  # certificate for this router and serves its default self-signed one.
   ip-blocker:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: ip-blocker
+    restart: unless-stopped
     command: /bin/sh -c 'echo "server { listen 80; return 403 \"Access Denied - Use domain name\"; }" > /etc/nginx/conf.d/default.conf && nginx -g "daemon off;"'
-      #    command: /bin/sh -c 'echo "server { listen 80; return 444; }" > /etc/nginx/conf.d/default.conf && nginx -g "daemon off;"'
     networks:
       - webproxy
     logging:
@@ -145,10 +199,36 @@ services:
         max-file: "2"
     labels:
       - "traefik.enable=true"
-      # This catches ANY request that's just an IP address
       - "traefik.http.routers.ip-block.rule=HostRegexp(`^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$`)"
       - "traefik.http.routers.ip-block.entrypoints=websecure"
       - "traefik.http.routers.ip-block.priority=1"
+      - "traefik.http.routers.ip-block.tls=true"
       - "traefik.http.routers.ip-block.service=ip-block-service"
-      - "traefik.http.routers.ip-block.tls.certresolver="
       - "traefik.http.services.ip-block-service.loadbalancer.server.port=80"
+
+  # ---------------------------------------------------------------------
+  # Demo backend. Not started by default - it exists so you can smoke-test
+  # the gateway without deploying a real app:
+  #     docker compose --profile demo up -d
+  # Your real applications live in their own compose files; see README
+  # "Putting an application behind the WAF".
+  # ---------------------------------------------------------------------
+  whoami:
+    image: traefik/whoami:v1.11.0
+    container_name: whoami-app
+    restart: unless-stopped
+    profiles: ["demo"]
+    networks:
+      - webproxy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whoami.rule=Host(`${APP_DOMAIN:-whoami.localhost}`)"
+      - "traefik.http.routers.whoami.entrypoints=websecure"
+      - "traefik.http.routers.whoami.middlewares=waf@docker"
+      - "traefik.http.routers.whoami.tls.certresolver=${CERT_RESOLVER:-}"
+      - "traefik.http.services.whoami.loadbalancer.server.port=80"

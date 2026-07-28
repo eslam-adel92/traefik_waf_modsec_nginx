@@ -1,260 +1,215 @@
-# Traefik with ModSecurity WAF (Nginx)
+# Traefik + ModSecurity WAF Gateway
 
-This project sets up a Web Application Firewall (WAF) using Traefik as a reverse proxy and ModSecurity with Nginx for security rules. It's designed to protect your web applications from common attacks.
+A reusable edge gateway: **Traefik v3** terminating TLS, with the **OWASP
+ModSecurity Core Rule Set** inspecting every request, plus L7 rate limiting and
+concurrency control. Application-agnostic — put any HTTP service behind it.
 
-## What's Included
+This repository is infrastructure config only; there is no application code.
 
-- **Traefik (v3.5.4)**: Acts as the main gateway for web traffic
-- **ModSecurity-nginx**: Provides WAF capabilities through Nginx
-- **OWASP Core Rule Set (CRS)**: A set of security rules that protect against common web attacks
+## Quick start
 
-## Project Structure
-
-```
-├── docker-compose.yaml        # Main configuration for all services
-├── modsec/
-│   ├── nginx.conf            # Nginx configuration
-│   ├── crs-setup.conf        # Core Rule Set configuration
-│   ├── modsec.conf          # ModSecurity main configuration
-│   ├── rules.conf           # Custom rules configuration
-│   └── data/
-│       ├── audit/           # Security audit logs
-│       └── collections/     # ModSecurity persistent data
-└── traefik/
-    └── traefik.yaml         # Traefik configuration
-```
-
-## How to Use
-
-### 1. Prerequisites
-
-- Docker
-- Docker Compose
-
-### 2. Quick Start
-
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/eslam-adel92/traefik_waf_modsec.git
-   cd traefik_waf_modsec
-   ```
-
-2. Start the services:
-   ```bash
-   docker compose up -d
-   ```
-
-3. Check if everything is running:
-   ```bash
-   docker compose ps
-   ```
-
-### 3. What's Protected?
-
-The WAF protects against:
-- SQL Injection attempts
-- Cross-Site Scripting (XSS)
-- Sensitive file access (like .env files)
-- Unauthorized API access
-- Malicious file uploads
-- And many other web attacks
-
-### 4. Configuration Details
-
-#### Traefik Configuration
-- Port 8000: Web traffic
-- Port 8080: Traefik dashboard
-- Port 443: HTTPS traffic (optional)
-- ModSecurity plugin enabled
-- Security headers middleware
-
-#### ModSecurity Configuration
-- Engine: ModSecurity-nginx
-- Paranoia Level: 1 (Configurable via environment variables)
-- Anomaly Scoring Thresholds:
-  - Inbound: 10
-  - Outbound: 5
-- Audit Logging: JSON format
-- Core Rule Set: Latest version via owasp/modsecurity-crs
-
-### 5. Security Tests and Results
-
-Below are comprehensive security tests performed on the WAF setup. Each test includes the command and expected result.
-
-#### 5.1 Basic Connectivity Test
 ```bash
-# Without Host header (should return 404 - this is expected)
-curl -i http://localhost:8000/
-
-# With Host header (should return 200 OK with whoami service information)
-curl -i -H "Host: whoami.localhost" http://localhost:8000/
+docker network create webproxy      # once, before the first run
+cp .env.example .env                # review it; leave CERT_RESOLVER empty for local
+make up                             # or: docker compose up -d
 ```
-✅ Results:
-- Without Host header: Returns 404 (This is correct behavior - Traefik requires Host header for routing)
-- With Host header: Returns 200 OK with proper security headers
 
-Note: The Host header is required because Traefik uses virtual hosting to route requests. 
-The `whoami.localhost` host is defined in the service labels in `docker-compose.yaml`:
+Smoke-test the gateway with the bundled demo backend:
+
+```bash
+make demo                           # starts whoami behind the WAF
+make test                           # 23 checks: attacks blocked, real traffic allowed
+```
+
+`make help` lists everything. The demo backend sits behind a compose profile,
+so `make up` alone runs the gateway only.
+
+## Putting an application behind the WAF
+
+Your app lives in its own compose file. Join the `webproxy` network and opt in
+with **one middleware label**:
+
 ```yaml
-traefik.http.routers.whoami.rule=Host(`whoami.localhost`)
+networks:
+  webproxy:
+    external: true
+
+services:
+  myapp:
+    image: myorg/myapp:1.2.3
+    networks: [webproxy]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.myapp.rule=Host(`app.example.com`)"
+      - "traefik.http.routers.myapp.entrypoints=websecure"
+      - "traefik.http.routers.myapp.middlewares=waf@docker"      # <- the WAF
+      - "traefik.http.routers.myapp.tls.certresolver=letsencrypt"
+      - "traefik.http.services.myapp.loadbalancer.server.port=8080"
 ```
 
-#### 5.2 XSS Protection Tests
+Two chains are published by the gateway:
+
+| Chain | Body limit | Concurrency/IP | Use for |
+|---|---|---|---|
+| `waf@docker` | `WAF_MAX_BODY_SIZE` (20 MB) | `INFLIGHT_LIMIT` (50) | everything |
+| `waf-uploads@docker` | `WAF_UPLOAD_MAX_BODY_SIZE` (300 MB) | `UPLOAD_INFLIGHT_LIMIT` (4) | large-upload routes only |
+
+Each chain is `ratelimit → inflight → cors → modsecurity → securityHeaders`.
+Rate limiting runs first so floods are dropped before paying for the WAF hop.
+
+### Large uploads
+
+The plugin buffers each request body **in memory** before forwarding it to the
+WAF, so the body limit is a memory cost — roughly
+`body limit × concurrency × client IPs`. That is why the default is 20 MB and
+big uploads get their own route:
+
+```yaml
+      - "traefik.http.routers.myapp-uploads.rule=Host(`app.example.com`) && PathPrefix(`/upload`)"
+      - "traefik.http.routers.myapp-uploads.entrypoints=websecure"
+      - "traefik.http.routers.myapp-uploads.priority=1000"
+      - "traefik.http.routers.myapp-uploads.middlewares=waf-uploads@docker"
+      - "traefik.http.routers.myapp-uploads.service=myapp"
+```
+
+**`priority` must be set and high.** Traefik's default priority is the rule's
+length, so without it the broader `Host()` router outranks the more specific
+one and your upload route never matches.
+
+## Architecture
+
+```
+                        ┌───────────────────────────────────────────────┐
+client ──TLS──> Traefik │ ratelimit → inflight → cors → WAF → headers   │ ──> your app
+                :443    └────────────────────────┬──────────────────────┘     [webproxy]
+                                                 │ copy of the request
+                                                 ▼
+                                        modsecurity (CRS/nginx) ──> waf-dummy
+                                              [internal]              [internal]
+```
+
+The plugin (`acouvreur/traefik-modsecurity-plugin`) sends a **copy** of each
+request to the WAF and reads back a status code. `>= 400` blocks; otherwise
+Traefik forwards the original request onward. Five consequences shape this
+config:
+
+- **The WAF's `BACKEND` must be a dummy.** The WAF proxies its copy somewhere to
+  produce a response. Pointing it at a real app runs every request **twice**.
+  `waf-dummy` exists for this, and the WAF cannot reach the app network at all.
+- **Response inspection is impossible.** The real response never passes through
+  ModSecurity, so phase-4 / `RESPONSE_BODY` rules and outbound anomaly scoring
+  do nothing. `MODSEC_RESP_BODY_ACCESS` is off deliberately.
+- **The WAF does not see the real `Host`** — it is `modsecurity:8080`. The
+  client hostname arrives only in `X-Forwarded-Host`; host-scoped rules must
+  match on that.
+- **WebSockets bypass the WAF** entirely.
+- **`timeoutMillis` must track the body limit.** The plugin's default is 2000 ms,
+  so any sizeable upload fails with `502` unless it is raised.
+
+## CORS and the WAF
+
+**A WAF block looks exactly like a CORS error in the browser.** A 403 from
+ModSecurity carries no `Access-Control-Allow-Origin`, so the browser reports
+"blocked by CORS policy" and hides the real 403. Disabling the WAF makes the
+message disappear — which is why this gets misdiagnosed as a CORS problem.
+
+Three mechanisms handle it:
+
+1. **Traefik answers preflight itself.** `cors` runs before the WAF and Traefik
+   does not forward preflight requests, so an `OPTIONS` preflight cannot be
+   blocked.
+2. **Blocks carry CORS headers.** `CORS_HEADER_403_*` attaches
+   `Access-Control-Allow-Origin` to WAF 403s and the plugin copies them
+   through, so the browser shows the real 403.
+3. **`ALLOWED_METHODS` includes the REST verbs.** CRS rule 911100 rejects
+   anything outside `tx.allowed_methods`, and the upstream default is
+   `GET HEAD POST OPTIONS` — so **`PUT`, `PATCH` and `DELETE` are blocked out of
+   the box**, a very common cause of "CORS errors" on REST APIs.
+
+Set `CORS_ALLOW_ORIGIN` to explicit origins in production; `*` cannot be
+combined with credentialed requests.
+
+## What this does and does not stop
+
+Handled here:
+
+- **OWASP Top 10 request-side attacks** — SQLi, XSS, RCE, traversal, SSRF,
+  log4shell/JNDI, scanner and bad-bot traffic, protocol abuse (CRS).
+- **L7 floods and brute force** — `ratelimit` per IP.
+- **Slowloris / connection exhaustion** — `inflight` caps concurrent requests
+  per IP, which is what bounds the long read timeout uploads require.
+- **Memory-exhaustion via large bodies** — body caps, tight upload concurrency.
+
+**Not handled here, by design:** volumetric L3/L4 DDoS — SYN floods, UDP
+amplification, anything that saturates your uplink. That traffic never reaches
+Traefik's logic; it saturates the host first. Terminating it needs capacity
+upstream of this box: Cloudflare, your cloud provider's scrubbing, or an ISP
+filter. This gateway is the application-layer half of the answer, not the whole
+one. If you front it with such a service, uncomment the `ipstrategy.depth`
+line in `docker-compose.yaml` so rate limits count the real client IP rather
+than the proxy's.
+
+## Tuning false positives
+
+Default paranoia is **2**. PL3 catches more but rejects things like newlines in
+input (rule 920272), and a PL3 gateway that gets switched off protects less
+than a PL2 one left on. Raise it once you are tuning regularly.
+
+Find what actually fired:
+
 ```bash
-# Basic XSS Test
-curl -i -H "Host: whoami.localhost" "http://localhost:8000/?q=<script>alert(1)</script>"
-
-# Event Handler XSS Test
-curl -i -H "Host: whoami.localhost" "http://localhost:8000/?q=<img src=x onerror=alert(1)>"
-
-# JavaScript URL XSS Test
-curl -i -H "Host: whoami.localhost" "http://localhost:8000/?q=<a href=javascript:alert(1)>click</a>"
+make triggered      # ranks the CRS rule IDs that blocked traffic
 ```
-✅ Results:
-- Blocks XSS attempts with 403 Forbidden
-- Anomaly score: 15 for basic XSS attacks
-- Proper logging of attack vectors
 
-#### 5.3 SQL Injection Tests
+Then add a **scoped exclusion** in `modsec/custom-rules.conf` — remove the
+specific rule for the specific host or parameter, keyed on `X-Forwarded-Host`.
+Worked examples are in that file. Never use `ctl:ruleEngine=Off`: it disables
+protection *and* logging. `ctl:ruleEngine=DetectionOnly` is the correct escape
+hatch.
+
+Exclusions work only because the file is mounted on the CRS `*-after.conf`
+hook. `ctl:ruleRemoveById` is resolved at parse time, so a rules file loaded
+*before* CRS cannot exclude a CRS rule — it fails silently.
+
 ```bash
-# UNION-based SQLi
-curl -i -H "Host: whoami.localhost" "http://localhost:8000/?id=1%20UNION%20SELECT%20username,password%20FROM%20users"
-
-# Boolean-based SQLi
-curl -i -H "Host: whoami.localhost" "http://localhost:8000/?id=1%20AND%201=1"
-
-# Time-based SQLi
-curl -i -H "Host: whoami.localhost" "http://localhost:8000/?id=1%20AND%20SLEEP(5)"
-
-# Quote-based SQLi
-curl -i -H "Host: whoami.localhost" "http://localhost:8000/?id=1%27%20OR%20%271%27=%271"
+make reload         # after editing rules
 ```
-✅ Results:
-- UNION-based attacks: Blocked (Anomaly score: 20)
-- Boolean-based attacks: Blocked (Anomaly score: 5)
-- Time-based attacks: Blocked (Anomaly score: 10)
-- Quote-based attacks: Blocked (Anomaly score: 5)
 
-#### 5.4 Path Traversal Tests
+`modsec/custom-rules.conf` also ships commented, opt-in profiles for PHP/Laravel,
+WordPress, Node and Java/Spring. Nothing app-specific is enabled by default.
+
+## Keeping it current
+
 ```bash
-# Basic traversal
-curl -i -H "Host: whoami.localhost" "http://localhost:8000/../etc/passwd"
-
-# Encoded traversal
-curl -i -H "Host: whoami.localhost" "http://localhost:8000/%2e%2e/%2e%2e/etc/passwd"
-
-# Double-encoded traversal
-curl -i -H "Host: whoami.localhost" "http://localhost:8000/%252e%252e/%252e%252e/etc/passwd"
-```
-⚠️ Results:
-- Double-encoded attempts: Blocked
-- Recommendation: Consider increasing paranoia level for better path traversal protection
-
-#### 5.5 Command Injection Tests
-```bash
-# Basic command injection
-curl -i -H "Host: whoami.localhost" "http://localhost:8000/?cmd=cat%20/etc/passwd"
-
-# Command chaining
-curl -i -H "Host: whoami.localhost" "http://localhost:8000/?cmd=whoami;id"
-
-# Command substitution
-curl -i -H "Host: whoami.localhost" "http://localhost:8000/?cmd=\$(id)"
-```
-✅ Results:
-- Basic command injection: Blocked (Anomaly score: 10)
-- Command chaining: Blocked (Anomaly score: 5)
-- Command substitution: Blocked (Anomaly score: 5)
-
-#### 5.6 Security Headers
-The setup includes essential security headers:
-- X-Frame-Options: DENY
-- X-Content-Type-Options: nosniff
-- X-Permitted-Cross-Domain-Policies: none
-- Referrer-Policy: strict-origin-when-cross-origin
-- X-XSS-Protection: 1; mode=block
-- Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
-
-#### 5.7 ModSecurity Audit Logging
-- Format: JSON
-- Location: `/var/log/modsec/audit.log`
-- Includes: Attack details, anomaly scores, and matched rules
-- View logs: `docker logs modsecurity`
+make versions       # pinned vs latest upstream
+make update         # pull + recreate
+make test           # verify nothing regressed
 ```
 
-All these requests should be blocked with a 403 Forbidden response.
+All images are pinned. `renovate.json` automates the bumps on GitHub: minor and
+patch updates are grouped, majors need explicit approval (Traefik majors change
+config), and the CRS image is checked monthly since its tags carry build dates.
+The Traefik plugin version in `traefik/traefik.yaml` is tracked too.
 
-### 6. Customizing Rules
+## Deployment notes
 
-To modify security rules:
-1. Adjust environment variables in `docker-compose.yaml`:
-   - `PARANOIA`: Set paranoia level (1-4)
-   - `ANOMALY_INBOUND`: Inbound anomaly score threshold
-   - `ANOMALY_OUTBOUND`: Outbound anomaly score threshold
-2. Restart containers to apply changes:
-   ```bash
-   docker compose restart
-   ```
-
-### 7. Viewing Logs
-
-To check ModSecurity audit logs:
-```bash
-docker logs modsecurity
-```
-
-### 8. Security Considerations
-
-For production use:
-1. Enable HTTPS with proper certificates
-2. Disable Traefik dashboard or secure it
-3. Adjust paranoia levels based on your security needs
-4. Regular monitoring of audit logs
-5. Keep Core Rule Set updated
-
-### 7. Checking Logs
-
-To view security logs:
-```bash
-docker compose logs modsecurity
-```
-
-## Security Notes
-
-- Default configuration is set to high security (Paranoia Level 3)
-- All sensitive endpoints are protected
-- Authentication is required for sensitive operations
-- Regular security updates are recommended
-
-## Troubleshooting
-
-1. If services don't start:
-   ```bash
-   docker compose down
-   docker compose up -d
-   ```
-
-2. If rules are too strict:
-   - Lower the paranoia level in `modsec/crs-setup.conf`
-   - Restart the services
-
-3. To check if WAF is working:
-   ```bash
-   # Test basic connectivity (should return 404 without Host header)
-   curl -i http://localhost:8000/
-
-   # Test with proper Host header (should return 200 OK)
-   curl -i -H "Host: whoami.localhost" http://localhost:8000/
-
-   # Test WAF blocking (should return 403 Forbidden)
-   curl -i -H "Host: whoami.localhost" "http://localhost:8000/?q=<script>alert(1)</script>"
-   ```
-
-   Expected results:
-   - First command: 404 (normal, as Host header is required)
-   - Second command: 200 OK with whoami service response
-   - Third command: 403 Forbidden (WAF blocks XSS attempt)
-
-## Contributing
-
-Feel free to open issues or submit pull requests if you have suggestions for improvements!
+- **`CERT_RESOLVER`** must be empty for `.localhost` / `.test` / internal names.
+  Let's Encrypt rejects names without a valid public TLD and Traefik retries
+  noisily against your rate limit. Set it to `letsencrypt` for real domains.
+- **Change the ACME email** in `traefik/traefik.yaml`. Traefik does *not* expand
+  environment variables in its static config, so it must be a literal.
+- **The dashboard has no authentication** (`api.insecure: true`), published to
+  `127.0.0.1:8085` only. Reach it over an SSH tunnel; never bind `0.0.0.0`.
+- **Never set `forwardedHeaders.insecure: true`** or add untrusted
+  `trustedIPs`. Traefik overwriting client-supplied `X-Forwarded-*` is what
+  makes host-scoped WAF exclusions safe.
+- **Logs go to stdout** and are rotated by Docker's json-file driver. Traefik
+  does not rotate its own log files, so writing them to a bind mount grows
+  without bound.
+- **SELinux hosts (Fedora/RHEL):** bind mounts carry `:z`. The docker socket is
+  deliberately not relabelled. If Traefik logs `Failed to retrieve information
+  of the docker client`, run it with `security_opt: [label=disable]` or put a
+  docker-socket-proxy in front.
+- **Latency:** every request costs an extra HTTP round-trip to the WAF. If you
+  serve many static assets through this gateway, consider a separate router for
+  them that skips the `modsecurity` middleware.

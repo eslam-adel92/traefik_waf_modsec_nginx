@@ -1,0 +1,39 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "Africa/Cairo",
+  "schedule": ["before 6am on monday"],
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "Traefik and nginx: group minor/patch, keep majors separate for review",
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "container images (minor/patch)"
+    },
+    {
+      "description": "Major container upgrades always land alone - they carry breaking config changes",
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "CRS image tags embed a build date, so patch bumps arrive constantly",
+      "matchPackageNames": ["owasp/modsecurity-crs"],
+      "groupName": "owasp coreruleset",
+      "schedule": ["before 6am on the first day of the month"]
+    }
+  ],
+  "customManagers": [
+    {
+      "description": "Keep the Traefik ModSecurity plugin version in traefik.yaml up to date",
+      "customType": "regex",
+      "managerFilePatterns": ["/^traefik/traefik\\.yaml$/"],
+      "matchStrings": [
+        "moduleName:\\s*github\\.com/(?<depName>[^\\s]+)\\s*\\n\\s*version:\\s*(?<currentValue>v[\\d.]+)"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "{{depName}}"
+    }
+  ]
+}

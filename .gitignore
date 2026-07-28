@@ -1,12 +1,19 @@
-traefik/letsencrypt/acme.json
-traefik/letsencrypt/acme.json.bak
-traefik/letsencrypt/acme.json.old
-traefik/letsencrypt/acme.json.new
-.vscode/
+# Secrets / local config
+.env
+
+# ACME account + certificates
+traefik/letsencrypt/*
+!traefik/letsencrypt/.gitkeep
+
+# Logs (Traefik and the WAF log to stdout; Docker rotates them)
 logs/
 *.log
+
+# Editor / OS
+.vscode/
+.idea/
 *.bak
 *.tmp
 *.swp
 *.swo
-*.DS_Store
+.DS_Store

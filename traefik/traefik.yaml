@@ -1,8 +1,11 @@
 global:
   checkNewVersion: true
   sendAnonymousUsage: false
+
 api:
   dashboard: true
+  # No authentication. Safe only because the compose file publishes port 8080
+  # to 127.0.0.1 exclusively. Do not expose it on 0.0.0.0.
   insecure: true
 
 entryPoints:
@@ -14,21 +17,32 @@ entryPoints:
           to: websecure
           scheme: https
           permanent: true
-  
+
   websecure:
     address: ":443"
     transport:
       respondingTimeouts:
+        # Long enough for large uploads on the `waf-uploads` chain. A long
+        # read timeout is what makes slowloris possible; the bound on it is
+        # the `inflight` middleware, which caps concurrent requests per IP.
+        # Lower this if you do not serve large uploads.
         readTimeout: "600s"
-        writeTimeout: "0s" # No timeout for writes
-        idleTimeout: "600s"
+        # No write timeout, so long downloads/streaming are not cut off.
+        writeTimeout: "0s"
+        idleTimeout: "180s"
+      lifeCycle:
+        graceTimeOut: "10s"
     http:
-      tls:
-        certResolver: letsencrypt
+      # TLS on by default using Traefik's self-signed certificate. Routers opt
+      # into ACME individually with `tls.certresolver=letsencrypt` (driven by
+      # CERT_RESOLVER in .env), so routers that cannot get a public cert - the
+      # bare-IP catch-all, or any .localhost/.test domain - never trigger
+      # failing ACME requests against your rate limit.
+      tls: {}
 
 serversTransport:
   forwardingTimeouts:
-    dialTimeout: "600s"
+    dialTimeout: "30s"
     responseHeaderTimeout: "600s"
 
 providers:
@@ -36,7 +50,6 @@ providers:
     endpoint: "unix:///var/run/docker.sock"
     exposedByDefault: false
     network: webproxy
-
   file:
     directory: /etc/traefik/dynamic
     watch: true
@@ -47,13 +60,14 @@ experimental:
       moduleName: github.com/acouvreur/traefik-modsecurity-plugin
       version: v1.3.0
 
-# Let's Encrypt Certificate Configuration
 certificatesResolvers:
   letsencrypt:
     acme:
-      email: ea.cloudhost@gmail.com  # CHANGE THIS to your email
+      # Traefik does NOT expand environment variables in this file - this must
+      # be a literal address. Change it per deployment.
+      email: ea.cloudhost@gmail.com
       storage: /letsencrypt/acme.json
-      # Use staging for testing, comment out for production
+      # Uncomment while testing to avoid Let's Encrypt rate limits.
       # caServer: https://acme-staging-v02.api.letsencrypt.org/directory
       httpChallenge:
         entryPoint: web
@@ -61,6 +75,9 @@ certificatesResolvers:
 log:
   level: WARN
 
+# Access log goes to stdout so Docker's json-file driver rotates it. Writing
+# to a bind-mounted file instead means it grows without bound - Traefik does
+# not rotate its own logs. bufferingSize batches writes to cut per-request I/O.
 accessLog:
   format: json
-  filePath: "/var/log/traefik/access.log"
+  bufferingSize: 100

@@ -1,0 +1,78 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+A reusable **edge gateway**: Traefik v3 (TLS termination, routing, L7 flood control) in front of the OWASP ModSecurity CRS on nginx. Application-agnostic — apps live in their own compose files, join the external `webproxy` network, and opt in with `middlewares=waf@docker`. There is no application code here; it is entirely infrastructure config.
+
+## Common commands
+
+```bash
+docker network create webproxy   # REQUIRED once before first run (external network)
+cp .env.example .env             # review; CERT_RESOLVER must be empty for .localhost
+make up                          # gateway only
+make demo                        # gateway + whoami demo backend (compose profile)
+make test                        # smoke tests: attacks blocked, real traffic allowed
+make triggered                   # rank CRS rule IDs that are firing (start tuning here)
+make reload                      # restart WAF after editing custom-rules.conf
+make versions                    # pinned vs latest upstream
+```
+
+`make test` needs a routed backend — run `make demo` first, or point it at a real host: `./scripts/smoke-test.sh app.example.com`. Local testing resolves `*.localhost` to 127.0.0.1 automatically.
+
+Compose/`.env` changes need `make restart` (recreate), not `docker compose restart`.
+
+## Request flow — and the constraints it imposes
+
+```
+client → Traefik :443 → ratelimit → inflight → cors → modsecurity → securityHeaders → app [webproxy]
+                                                           │ copy of request
+                                                           ▼
+                                                 modsecurity (CRS/nginx) → waf-dummy [internal]
+```
+
+The plugin sends a **copy** of each request to the WAF and reads back a status code; `>=400` blocks, otherwise Traefik forwards the original. Five consequences drive most of this config — check against them before changing anything:
+
+- **`BACKEND` must be a dummy service.** The WAF proxies its copy to `BACKEND` to get a response. Pointing it at a real app executes every request **twice**. `waf-dummy` exists for this; the WAF is on `internal` only and cannot reach the app network.
+- **Response-phase rules cannot work.** The real response never traverses ModSecurity, so phase 4 / `RESPONSE_BODY` rules and outbound anomaly scoring are inert. `MODSEC_RESP_BODY_ACCESS=Off` is deliberate.
+- **The WAF never sees the real `Host`** — it is `modsecurity:8080`. Host-scoped rules must match `REQUEST_HEADERS:X-Forwarded-Host`. Safe only because Traefik overwrites client-supplied `X-Forwarded-*` and the WAF is off the shared network; keep both true.
+- **WebSockets bypass the WAF** entirely.
+- **`timeoutMillis` must scale with the body limit.** Plugin default is 2000 ms and it buffers the whole body in memory.
+
+## Middleware chains — the public interface
+
+Defined as Traefik `chain` middlewares on the traefik service's labels:
+
+- `waf@docker` — default. `WAF_MAX_BODY_SIZE` (20 MB), `INFLIGHT_LIMIT` (50/IP).
+- `waf-uploads@docker` — large-upload routes. `WAF_UPLOAD_MAX_BODY_SIZE` (300 MB), `UPLOAD_INFLIGHT_LIMIT` (4/IP).
+
+Body limits are a **memory cost** — the plugin buffers bodies in RAM, so worst case is roughly `body limit × concurrency × client IPs`. That is why the default is low and large uploads get a separate route.
+
+A more specific router (e.g. `Host(...) && PathPrefix('/upload')`) **must set an explicit high `priority`**. Traefik's default priority is rule length, so the broader `Host()` router otherwise wins and the specific route never matches.
+
+## Editing WAF rules
+
+`modsec/custom-rules.conf` is the only mounted rules file, at `/etc/modsecurity.d/owasp-crs/plugins/custom-after.conf` — the CRS "after" hook, **not** under `rules/`. Load-bearing: `ctl:ruleRemoveById` resolves at parse time, and files under `rules/` with a numeric prefix are globbed *before* CRS, so exclusions written there fail silently.
+
+- Custom detection uses IDs 1200–1299; exclusions/tuning 5000–5999. CRS owns 900000+.
+- Generic rules are active; PHP/Laravel, WordPress, Node and Java profiles ship commented out. Keep it that way — this gateway fronts multiple app types.
+- To tune: `make triggered` for the rule ID, then a scoped `ctl:ruleRemoveById` / `ctl:ruleRemoveTargetById` keyed on `X-Forwarded-Host`.
+- Never `ctl:ruleEngine=Off` — kills protection *and* logging. `DetectionOnly` is the escape hatch.
+- Default paranoia is 2; PL3 rejects newlines in input (920272) and tends to get switched off wholesale.
+
+## CORS
+
+A WAF 403 carries no `Access-Control-Allow-Origin`, so browsers report it as a CORS error and hide the real cause — the most common misdiagnosis in this stack. Three mechanisms: `cors` runs before the WAF and Traefik answers preflight without forwarding it; `CORS_HEADER_403_*` puts CORS headers on WAF blocks (the plugin copies them through); `ALLOWED_METHODS` includes PUT/PATCH/DELETE, which CRS 911100 rejects by default (`GET HEAD POST OPTIONS`).
+
+## Scope
+
+Handles request-side OWASP Top 10 (CRS), L7 floods (`ratelimit`), slowloris (`inflight`), and body-based memory exhaustion. Does **not** handle volumetric L3/L4 DDoS — that needs upstream scrubbing. Don't claim otherwise in docs.
+
+## Environment notes
+
+- `CERT_RESOLVER` must be empty for `.localhost`/`.test`/internal names; Let's Encrypt rejects non-public TLDs and Traefik retries against the rate limit. This is what the old empty `tls.certresolver=` labels were working around.
+- ACME email in `traefik/traefik.yaml` must be a literal — Traefik does not expand env vars in static config.
+- Dashboard has no auth (`api.insecure: true`), published to `127.0.0.1:8085` only. Keep it off `0.0.0.0`.
+- Traefik and the WAF log to **stdout**, rotated by Docker's json-file driver. Traefik does not rotate its own log files, so don't reintroduce a file bind mount.
+- On SELinux hosts (developed on Fedora), bind mounts need `:z`, which is set. The docker socket is intentionally not relabelled, so Traefik cannot read it under enforcing SELinux without `security_opt: [label=disable]` or a socket proxy.
