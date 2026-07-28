@@ -56,7 +56,8 @@ A more specific router (e.g. `Host(...) && PathPrefix('/upload')`) **must set an
 `modsec/custom-rules.conf` is the only mounted rules file, at `/etc/modsecurity.d/owasp-crs/plugins/custom-after.conf` — the CRS "after" hook, **not** under `rules/`. Load-bearing: `ctl:ruleRemoveById` resolves at parse time, and files under `rules/` with a numeric prefix are globbed *before* CRS, so exclusions written there fail silently.
 
 - Custom detection uses IDs 1200–1299; exclusions/tuning 5000–5999. CRS owns 900000+.
-- Generic rules are active; PHP/Laravel, WordPress, Node and Java profiles ship commented out. Keep it that way — this gateway fronts multiple app types.
+- **All rules are active** (1200–1240: exposed files, PHP/Laravel, WordPress, Node/JS, Java/.NET). Nothing is commented out for a server operator to enable — the repo is the only place this file is edited. Do not reintroduce opt-in blocks.
+- One gateway fronts several stacks at once, so every rule must be safe against **all** of them. Target attacker-only paths, not whole directories: `/vendor/*.php` not `/vendor/`, `/storage/*.log` not `/storage/` (Laravel's `storage:link` serves real uploads there), `/.next/` not `/_next/`. Add both a blocked case and an allowed-lookalike case to `scripts/smoke-test.sh` for any new rule.
 - To tune: `make triggered` for the rule ID, then a scoped `ctl:ruleRemoveById` / `ctl:ruleRemoveTargetById` keyed on `X-Forwarded-Host`.
 - Never `ctl:ruleEngine=Off` — kills protection *and* logging. `DetectionOnly` is the escape hatch.
 - Default paranoia is 2; PL3 rejects newlines in input (920272) and tends to get switched off wholesale.

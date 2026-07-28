@@ -175,8 +175,19 @@ hook. `ctl:ruleRemoveById` is resolved at parse time, so a rules file loaded
 make reload         # after editing rules
 ```
 
-`modsec/custom-rules.conf` also ships commented, opt-in profiles for PHP/Laravel,
-WordPress, Node and Java/Spring. Nothing app-specific is enabled by default.
+### Custom rules
+
+`modsec/custom-rules.conf` is fully active — there is nothing to uncomment on a
+server, and the repo is the only place it is edited. Eleven rules cover exposed
+files (VCS, dotfiles, manifests, backups, status pages), PHP/Laravel, WordPress,
+Node/JS and Java/Spring/.NET.
+
+Because one gateway fronts several stacks at once, every rule is written to be
+safe against all of them. The patterns target attacker-only paths and leave the
+legitimate lookalikes alone — `/vendor/autoload.php` is blocked but
+`/vendor/bootstrap.min.css` is not; `/storage/laravel.log` is blocked but
+`/storage/photos/img.jpg` (Laravel's `storage:link`) is not; `/.next/` is
+blocked but `/_next/` is not. `make test` pins both halves of each rule.
 
 ## Keeping it current
 
