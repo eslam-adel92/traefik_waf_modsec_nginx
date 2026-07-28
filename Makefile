@@ -1,7 +1,7 @@
 COMPOSE ?= docker compose
 HOST    ?= $(shell grep -E '^APP_DOMAIN=' .env 2>/dev/null | cut -d= -f2 || echo whoami.localhost)
 
-.PHONY: help up down restart logs waf-logs ps reload test versions pull update demo
+.PHONY: help up down restart logs waf-logs ps reload test versions pull update demo triggered
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \

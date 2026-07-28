@@ -18,7 +18,7 @@ Smoke-test the gateway with the bundled demo backend:
 
 ```bash
 make demo                           # starts whoami behind the WAF
-make test                           # 23 checks: attacks blocked, real traffic allowed
+make test                           # attacks blocked, real traffic allowed
 ```
 
 `make help` lists everything. The demo backend sits behind a compose profile,
