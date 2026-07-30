@@ -54,7 +54,6 @@ check "proto pollution __proto__" 403 --get --data-urlencode '__proto__[x]=1' "h
 check "proto pollution ctor"   403 --get --data-urlencode 'constructor[prototype][x]=1' "https://$HOST/"
 check "node /node_modules/"    403 "https://$HOST/node_modules/lodash/index.js"
 check "build dir /.next/"      403 "https://$HOST/.next/build-manifest.json"
-check "source map /app.js.map" 403 "https://$HOST/static/app.js.map"
 check "java /actuator/env"     403 "https://$HOST/actuator/env"
 check "java /WEB-INF/web.xml"  403 "https://$HOST/WEB-INF/web.xml"
 check ".NET /elmah.axd"        403 "https://$HOST/elmah.axd"
@@ -69,6 +68,9 @@ check "param named prototype"  200 --get --data-urlencode 'prototype=v2' "https:
 check "param named constructor" 200 --get --data-urlencode 'constructor=acme' "https://$HOST/"
 check "path /environment"      200 "https://$HOST/environment"
 check "path /statuses"         200 "https://$HOST/statuses"
+# Source maps are deliberately allowed - rule 1231 used to block them and
+# 403'd Grafana's, which ships them under /public/ on purpose.
+check "source map /app.js.map" 200 "https://$HOST/static/app.js.map"
 
 echo
 echo "Legitimate traffic (expect 200)"
