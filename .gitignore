@@ -1,6 +1,9 @@
 # Secrets / local config
 .env
 
+# Site-specific WAF rules (real hostnames) - keep out of the public template
+modsec/site-rules.conf
+
 # ACME account + certificates
 traefik/letsencrypt/*
 !traefik/letsencrypt/.gitkeep

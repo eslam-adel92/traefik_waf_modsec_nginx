@@ -1,0 +1,47 @@
+# Site-specific WAF rules - NOT tracked by git.
+#
+#   cp modsec/site-rules.conf.example modsec/site-rules.conf
+#   # then in .env:  SITE_RULES_FILE=./modsec/site-rules.conf
+#   make reload
+#
+# WHY THIS FILE EXISTS
+# custom-rules.conf is a public template shared across deployments. Anything
+# that names a real hostname belongs here instead: a public rule saying "on
+# app.example.com these rule families are disabled" is a map of where that
+# specific system's WAF coverage is thinnest.
+#
+# This file is mounted on the same CRS "*-after.conf" hook as custom-rules.conf,
+# so ctl:ruleRemoveById works here exactly the same way.
+#
+# ID range: 5100-5999. custom-rules.conf uses 1200-1299 and 5000-5099.
+#
+# Match on X-Forwarded-Host, never Host - the WAF sees Host as
+# "modsecurity:8080" because the plugin opens its own connection. See the
+# notes at the top of custom-rules.conf.
+
+
+# ---- Example: drop one CRS rule for one host ------------------------------
+# SecRule REQUEST_HEADERS:X-Forwarded-Host "@rx (?i)^(?:[\w-]+\.)*example\.com(?::\d+)?$" \
+#     "id:5100,phase:1,pass,nolog,ctl:ruleRemoveById=920272"
+
+# ---- Example: drop a rule for one host AND one path only ------------------
+# All actions go in the chain starter; they apply only if the whole chain
+# matches.
+#
+# SecRule REQUEST_HEADERS:X-Forwarded-Host "@rx (?i)^app\.example\.com(?::\d+)?$" \
+#     "id:5101,phase:1,pass,nolog,ctl:ruleRemoveByTag=attack-sqli,chain"
+#     SecRule REQUEST_URI "@beginsWith /api/report-builder"
+
+# ---- Example: observation mode for a host you are still tuning ------------
+# DetectionOnly still logs what WOULD have blocked, so the host keeps
+# producing the data needed to write a real exclusion. Never use
+# ctl:ruleEngine=Off - it logs nothing.
+#
+# SecRule REQUEST_HEADERS:X-Forwarded-Host "@rx (?i)^new-app\.example\.com(?::\d+)?$" \
+#     "id:5102,phase:1,pass,nolog,ctl:ruleEngine=DetectionOnly"
+
+# ---- Example: block source maps for an app that should not serve them -----
+# SecRule REQUEST_HEADERS:X-Forwarded-Host "@rx (?i)^app\.example\.com(?::\d+)?$" \
+#     "id:5103,phase:1,pass,nolog,chain"
+#     SecRule REQUEST_FILENAME "@rx \.(?:js|css)\.map$" \
+#         "deny,status:403,log,msg:'Source map access blocked'"

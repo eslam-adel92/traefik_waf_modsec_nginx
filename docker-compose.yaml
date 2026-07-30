@@ -154,6 +154,10 @@ services:
       # loaded before CRS (e.g. rules/100-custom-rules.conf) cannot exclude a
       # CRS rule - the rule does not exist yet and the ctl is a silent no-op.
       - ./modsec/custom-rules.conf:/etc/modsecurity.d/owasp-crs/plugins/custom-after.conf:ro,z
+      # Site-specific rules (real hostnames, per-deployment tuning). Defaults
+      # to the committed example, which is comments only - so a fresh clone
+      # works untouched. Point SITE_RULES_FILE at your own gitignored file.
+      - ${SITE_RULES_FILE:-./modsec/site-rules.conf.example}:/etc/modsecurity.d/owasp-crs/plugins/site-after.conf:ro,z
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/"]
       interval: 10s
