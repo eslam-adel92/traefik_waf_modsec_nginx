@@ -3,7 +3,15 @@
 #
 #   ./scripts/smoke-test.sh [host]
 #
-# Needs a routed backend. For the bundled demo: docker compose --profile demo up -d
+# Needs a routed backend that answers 200 on ARBITRARY paths. The suite is half
+# "attacks must 403" and half "ordinary traffic must not" - and the second half
+# is the one that catches an over-aggressive rule. A real application cannot
+# play that role: anything behind a login redirects unknown paths, so "the WAF
+# allowed it" and "the app bounced it" become indistinguishable. That is what
+# the demo whoami backend exists for:
+#
+#   make demo && make test && docker compose --profile demo down
+#
 # Hosts ending in .localhost are resolved to 127.0.0.1 automatically.
 set -uo pipefail
 
@@ -23,6 +31,49 @@ check() { # name expected curl-args...
     printf '  \033[31mFAIL\033[0m  %-38s %s (wanted %s)\n' "$name" "$got" "$want"; fail=$((fail+1))
   fi
 }
+
+# ---- Preflight -------------------------------------------------------------
+# Every assertion below depends on reaching a routed backend. When that is not
+# true the whole suite fails identically and says nothing useful, so diagnose it
+# once, here. Note a 404 is NOT the WAF rejecting anything: with no matching
+# router Traefik answers before the middleware chain runs, so the WAF is never
+# invoked at all.
+probe=$("${CURL[@]}" -w '%{http_code}' "https://$HOST/")
+case "$probe" in
+  000)
+    echo "ERROR: cannot reach https://$HOST" >&2
+    echo "  The gateway is not running, or the name does not resolve." >&2
+    echo "  Start it with:  make up" >&2
+    exit 2 ;;
+  404)
+    echo "ERROR: no router matches https://$HOST - Traefik returned 404." >&2
+    echo "  Nothing is published at that hostname, so there is nothing to" >&2
+    echo "  test: the WAF only runs on requests a router has matched." >&2
+    # Two very different causes produce this 404, and the fix differs. Ask the
+    # dashboard whether Traefik discovered ANY docker router: none at all means
+    # the provider itself is broken, not that a backend is missing. Loopback
+    # only, so this silently degrades to the common case from another machine.
+    routers=$(curl -s --max-time 3 http://127.0.0.1:8085/api/http/routers 2>/dev/null)
+    if [[ -n "$routers" && "$routers" != *"@docker"* ]]; then
+      echo >&2
+      echo "  Traefik has discovered NO docker routers at all, so a backend is" >&2
+      echo "  not what you are missing - its docker provider is failing:" >&2
+      echo "    docker compose logs traefik | grep -i 'provider error'" >&2
+      echo "  On an enforcing SELinux host this is the unlabelled docker" >&2
+      echo "  socket - see the SELinux note in the README." >&2
+    else
+      echo "  Start the demo backend:   make demo" >&2
+      echo "  Or target a routed host:  ./scripts/smoke-test.sh app.example.com" >&2
+    fi
+    exit 2 ;;
+  200) ;;
+  *)
+    echo "WARNING: https://$HOST/ returned $probe, expected 200." >&2
+    echo "  The 'expect 200' tests need a backend that answers 200 on any" >&2
+    echo "  path. A login redirect will fail them even though the WAF is" >&2
+    echo "  behaving correctly. The 'expect 403' results are still valid." >&2
+    echo >&2 ;;
+esac
 
 echo "Target: https://$HOST"
 echo
