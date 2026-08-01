@@ -10,26 +10,62 @@
 # allowed it" and "the app bounced it" become indistinguishable. That is what
 # the demo whoami backend exists for:
 #
-#   make demo && make test && docker compose --profile demo down
+#   make demo && make test && docker compose rm -sf whoami
+#
+# (`docker compose --profile demo down` removes the gateway too, not just the
+# demo - it tears down the whole project.)
+#
+# Pointed at a real application instead, the suite runs DEGRADED: expect-200
+# assertions the app answers itself are reported SKIP, and only a WAF block
+# still counts as a failure. See the preflight below.
 #
 # Hosts ending in .localhost are resolved to 127.0.0.1 automatically.
 set -uo pipefail
 
 HOST="${1:-whoami.localhost}"
 CURL=(curl -sk -o /dev/null --max-time 20)
+CURL_HDR=(curl -sk -D - -o /dev/null --max-time 20)
 case "$HOST" in
-  *.localhost|localhost) CURL+=(--resolve "$HOST:443:127.0.0.1" --resolve "$HOST:80:127.0.0.1") ;;
+  *.localhost|localhost)
+    CURL+=(--resolve "$HOST:443:127.0.0.1" --resolve "$HOST:80:127.0.0.1")
+    CURL_HDR+=(--resolve "$HOST:443:127.0.0.1" --resolve "$HOST:80:127.0.0.1") ;;
 esac
 
-pass=0; fail=0
+# Did this response come back from the application, or was it generated before
+# reaching it? Both chains run securityHeaders AFTER modsecurity, so a WAF block
+# returns early and never picks those headers up, while anything the app
+# answered - including the app's own 403 - carries them. That is a property of
+# the gateway's middleware order, not of any particular application, so it holds
+# for every backend on waf@docker / waf-uploads@docker.
+reached_app() { # curl-args...
+  "${CURL_HDR[@]}" "$@" 2>/dev/null | grep -qi '^strict-transport-security:'
+}
+
+degraded=0
+pass=0; fail=0; skip=0
 check() { # name expected curl-args...
   local name="$1" want="$2"; shift 2
   local got; got=$("${CURL[@]}" -w '%{http_code}' "$@")
+
   if [[ "$got" == "$want" ]]; then
-    printf '  \033[32mPASS\033[0m  %-38s %s\n' "$name" "$got"; pass=$((pass+1))
-  else
-    printf '  \033[31mFAIL\033[0m  %-38s %s (wanted %s)\n' "$name" "$got" "$want"; fail=$((fail+1))
+    printf '  \033[32mPASS\033[0m  %-38s %s\n' "$name" "$got"; pass=$((pass+1)); return
   fi
+
+  # Against a real application an expect-200 miss is usually the app bouncing
+  # the request itself, which says nothing about the WAF. Only a block that
+  # never reached the app is still a real finding - and 403 alone does not
+  # prove that, since plenty of frameworks return 403 for their own authz
+  # failures (Django CSRF, Laravel policies, nginx deny).
+  if [[ $degraded -eq 1 && "$want" == 200 ]]; then
+    if [[ "$got" == 403 ]] && ! reached_app "$@"; then
+      printf '  \033[31mFAIL\033[0m  %-38s %s (WAF blocked it)\n' "$name" "$got"
+      fail=$((fail+1)); return
+    fi
+    printf '  \033[33mSKIP\033[0m  %-38s %s (app answered, not the WAF)\n' "$name" "$got"
+    skip=$((skip+1)); return
+  fi
+
+  printf '  \033[31mFAIL\033[0m  %-38s %s (wanted %s)\n' "$name" "$got" "$want"; fail=$((fail+1))
 }
 
 # ---- Preflight -------------------------------------------------------------
@@ -38,7 +74,21 @@ check() { # name expected curl-args...
 # once, here. Note a 404 is NOT the WAF rejecting anything: with no matching
 # router Traefik answers before the middleware chain runs, so the WAF is never
 # invoked at all.
-probe=$("${CURL[@]}" -w '%{http_code}' "https://$HOST/")
+#
+# Probe a path that cannot exist rather than "/": what the suite needs is a
+# backend answering 200 on ARBITRARY paths, and an app with a public landing
+# page answers "/" with 200 while 404ing everything else.
+probe_url="https://$HOST/__waf-smoke-probe-$$"
+probe=$("${CURL[@]}" -w '%{http_code}' "$probe_url")
+# A 404 from Traefik (no router matched) and a 404 from a routed app look
+# identical by status, so ask whether it came back through the chain.
+probe_reached_app=0
+reached_app "$probe_url" && probe_reached_app=1
+
+if [[ "$probe" != 000 && $probe_reached_app -eq 0 && "$probe" != 200 ]]; then
+  probe=404   # nothing answered from behind the chain - treat as unrouted
+fi
+
 case "$probe" in
   000)
     echo "ERROR: cannot reach https://$HOST" >&2
@@ -68,14 +118,19 @@ case "$probe" in
     exit 2 ;;
   200) ;;
   *)
-    echo "WARNING: https://$HOST/ returned $probe, expected 200." >&2
-    echo "  The 'expect 200' tests need a backend that answers 200 on any" >&2
-    echo "  path. A login redirect will fail them even though the WAF is" >&2
-    echo "  behaving correctly. The 'expect 403' results are still valid." >&2
+    degraded=1
+    echo "NOTE: $HOST answered an unknown path with $probe, not 200 - this is a" >&2
+    echo "  real application, not the demo backend. Running DEGRADED:" >&2
+    echo "    - 'expect 403' assertions are enforced normally." >&2
+    echo "    - 'expect 200' assertions the app answers itself are SKIPped;" >&2
+    echo "      only a response the WAF blocked before the app is a failure." >&2
+    echo "  For full coverage of the over-blocking half, run against the demo" >&2
+    echo "  backend instead:  make demo && make test" >&2
     echo >&2 ;;
 esac
 
 echo "Target: https://$HOST"
+[[ $degraded -eq 1 ]] && echo "Mode:   degraded (real application)"
 echo
 echo "Attacks (expect 403)"
 check "XSS script tag"        403 "https://$HOST/?q=<script>alert(1)</script>"
@@ -157,5 +212,12 @@ fi
 
 echo
 echo "-------------------------------------------"
-printf 'passed: %d   failed: %d\n' "$pass" "$fail"
+printf 'passed: %d   failed: %d' "$pass" "$fail"
+[[ $skip -gt 0 ]] && printf '   skipped: %d' "$skip"
+printf '\n'
+if [[ $skip -gt 0 ]]; then
+  echo "$skip over-blocking check(s) could not run against a real application."
+  echo "Run them with:  make demo && make test"
+fi
 [[ $fail -eq 0 ]] || exit 1
+exit 0
