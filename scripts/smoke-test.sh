@@ -68,6 +68,19 @@ check() { # name expected curl-args...
   printf '  \033[31mFAIL\033[0m  %-38s %s (wanted %s)\n' "$name" "$got" "$want"; fail=$((fail+1))
 }
 
+# Assert on a response header rather than a status code. `want` is present or
+# absent, matched case-insensitively against the start of a header line.
+check_header() { # name header present|absent curl-args...
+  local name="$1" header="$2" want="$3"; shift 3
+  local got=absent
+  "${CURL_HDR[@]}" "$@" 2>/dev/null | grep -qi "^$header:" && got=present
+  if [[ "$got" == "$want" ]]; then
+    printf '  \033[32mPASS\033[0m  %-38s %s\n' "$name" "$got"; pass=$((pass+1))
+  else
+    printf '  \033[31mFAIL\033[0m  %-38s %s (wanted %s)\n' "$name" "$got" "$want"; fail=$((fail+1))
+  fi
+}
+
 # ---- Preflight -------------------------------------------------------------
 # Every assertion below depends on reaching a routed backend. When that is not
 # true the whole suite fails identically and says nothing useful, so diagnose it
@@ -197,6 +210,17 @@ check "HTTP -> HTTPS redirect" 301 "http://$HOST/"
 check "CORS preflight answered" 200 -X OPTIONS \
       -H 'Origin: https://app.example.com' -H 'Access-Control-Request-Method: DELETE' \
       "https://$HOST/api/items/1"
+
+# Compression is a gateway concern, but whether a response clears
+# minResponseBodyBytes is decided by the backend - so assert it only against the
+# demo backend, which echoes the request back and lets us control the size.
+if [[ $degraded -eq 0 ]]; then
+  pad=$(printf 'a%.0s' {1..2000})
+  check_header "large response compressed" content-encoding present \
+        -H 'Accept-Encoding: gzip' "https://$HOST/?pad=$pad"
+  check_header "small response uncompressed" content-encoding absent \
+        -H 'Accept-Encoding: gzip' "https://$HOST/"
+fi
 
 # A WAF block must carry CORS headers, otherwise browsers report it as a
 # phantom CORS failure instead of the real 403.

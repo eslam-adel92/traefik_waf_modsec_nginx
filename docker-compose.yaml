@@ -45,10 +45,10 @@ services:
       # An application opts in with a single label:
       #     traefik.http.routers.<name>.middlewares=waf@docker
       # =====================================================================
-      - "traefik.http.middlewares.waf.chain.middlewares=ratelimit@docker,inflight@docker,cors@docker,modsecurity@docker,securityHeaders@docker"
+      - "traefik.http.middlewares.waf.chain.middlewares=ratelimit@docker,inflight@docker,compress@docker,cors@docker,modsecurity@docker,securityHeaders@docker"
       # For large-upload routes: same protection, bigger body budget, much
       # tighter concurrency. See README "Large uploads".
-      - "traefik.http.middlewares.waf-uploads.chain.middlewares=ratelimit@docker,inflight-uploads@docker,cors@docker,modsecurity-large@docker,securityHeaders@docker"
+      - "traefik.http.middlewares.waf-uploads.chain.middlewares=ratelimit@docker,inflight-uploads@docker,compress@docker,cors@docker,modsecurity-large@docker,securityHeaders@docker"
 
       # ---- L7 flood control ----------------------------------------------
       # Ordered FIRST in the chains above so floods are dropped before paying
@@ -64,6 +64,19 @@ services:
       # a slow client can hold a connection open, but only this many.
       - "traefik.http.middlewares.inflight.inflightreq.amount=${INFLIGHT_LIMIT:-50}"
       - "traefik.http.middlewares.inflight-uploads.inflightreq.amount=${UPLOAD_INFLIGHT_LIMIT:-4}"
+
+      # ---- Compression ------------------------------------------------------
+      # For backends that do not compress themselves. Traefik skips any response
+      # that already carries Content-Encoding, so an application doing its own
+      # gzip is unaffected rather than double-compressed. Negotiates gzip, br or
+      # zstd from the client's Accept-Encoding. Streams - it does not buffer the
+      # body, so unlike maxBodySize this is not a per-request memory cost.
+      - "traefik.http.middlewares.compress.compress=true"
+      - "traefik.http.middlewares.compress.compress.minResponseBodyBytes=${COMPRESS_MIN_BYTES:-1024}"
+      # Server-Sent Events are NOT excluded by default, and compressing them
+      # buffers events until the window flushes, which breaks streaming.
+      # (application/grpc is never compressed by Traefik, so it needs no entry.)
+      - "traefik.http.middlewares.compress.compress.excludedContentTypes=${COMPRESS_EXCLUDED_TYPES:-text/event-stream}"
 
       # ---- WAF ------------------------------------------------------------
       # Sends a COPY of each request to the modsecurity container. >=400 blocks.
