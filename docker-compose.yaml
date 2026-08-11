@@ -32,6 +32,13 @@ services:
       - ./traefik/traefik.yaml:/etc/traefik/traefik.yaml:ro,z
       - ./traefik/dynamic:/etc/traefik/dynamic:ro,z
       - ./traefik/letsencrypt:/letsencrypt:z
+      # Read-only view of a HOST certbot store, for migrating off an existing
+      # nginx/Apache box: point a `tls.certificates` entry in traefik/dynamic at
+      # /letsencrypt-host/live/<name>/ and Traefik serves the certs certbot
+      # already issued, with no ACME during the cutover. Mount the whole tree,
+      # not just live/ - live/ is symlinks into archive/. Harmless when the path
+      # does not exist. Traefik's OWN ACME store stays at /letsencrypt above.
+      - ${HOST_CERT_STORE:-/etc/letsencrypt}:/letsencrypt-host:ro
     logging:
       driver: "json-file"
       options:
@@ -56,14 +63,30 @@ services:
       - "traefik.http.middlewares.ratelimit.ratelimit.average=${RATE_LIMIT_AVERAGE:-100}"
       - "traefik.http.middlewares.ratelimit.ratelimit.burst=${RATE_LIMIT_BURST:-200}"
       - "traefik.http.middlewares.ratelimit.ratelimit.period=${RATE_LIMIT_PERIOD:-1s}"
-      # Behind Cloudflare/another proxy, uncomment so the real client IP is
-      # used instead of the proxy's, or every request counts against one IP:
-      # - "traefik.http.middlewares.ratelimit.ratelimit.sourcecriterion.ipstrategy.depth=1"
+
+      # Which IP the limits are counted against. TRUSTED_PROXY_IPS lists the
+      # CDN/proxy ranges in front of this gateway (see .env.example); Traefik
+      # then walks X-Forwarded-For from the right and takes the first address
+      # that is NOT one of them - the real client.
+      #
+      # `excludedIPs` rather than `depth=1` on purpose: one gateway usually
+      # fronts a mix of proxied and directly-resolving hostnames, and excludedIPs
+      # is correct for both. It yields the true client for proxied traffic AND
+      # falls back to the socket address for direct traffic, whereas depth=1
+      # would read an attacker-supplied header on the direct hostnames.
+      #
+      # Empty by default, which Traefik treats as plain RemoteAddr - so this is
+      # a no-op unless you are actually behind a proxy.
+      - "traefik.http.middlewares.ratelimit.ratelimit.sourcecriterion.ipstrategy.excludedips=${TRUSTED_PROXY_IPS:-}"
 
       # Concurrent in-flight requests per IP. This is what bounds slowloris:
       # a slow client can hold a connection open, but only this many.
+      # Same source-criterion reasoning as ratelimit above: without it, every
+      # visitor arriving through one CDN edge shares a single budget.
       - "traefik.http.middlewares.inflight.inflightreq.amount=${INFLIGHT_LIMIT:-50}"
+      - "traefik.http.middlewares.inflight.inflightreq.sourcecriterion.ipstrategy.excludedips=${TRUSTED_PROXY_IPS:-}"
       - "traefik.http.middlewares.inflight-uploads.inflightreq.amount=${UPLOAD_INFLIGHT_LIMIT:-4}"
+      - "traefik.http.middlewares.inflight-uploads.inflightreq.sourcecriterion.ipstrategy.excludedips=${TRUSTED_PROXY_IPS:-}"
 
       # ---- Compression ------------------------------------------------------
       # For backends that do not compress themselves. Traefik skips any response

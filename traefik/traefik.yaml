@@ -8,9 +8,52 @@ api:
   # to 127.0.0.1 exclusively. Do not expose it on 0.0.0.0.
   insecure: true
 
+# Ranges of a CDN/proxy sitting IN FRONT of this gateway. Traefik keeps the
+# X-Forwarded-* headers a trusted peer sends and rewrites them for everyone
+# else, so this is what makes the real client IP visible instead of the
+# proxy's - without it, ratelimit and inflight count every visitor arriving
+# through one CDN edge as a single source and throttle real traffic.
+#
+# The README's "never add untrusted trustedIPs" warning still stands: list ONLY
+# ranges you actually sit behind. Trusting a peer means believing its
+# X-Forwarded-Host too, which is what host-scoped WAF rules key on - so every
+# router MUST also overwrite X-Forwarded-Host with its own literal hostname.
+# See README "Behind Cloudflare".
+#
+# Static config cannot expand environment variables, so these are literal, and
+# a YAML anchor is not an option either - Traefik rejects unknown top-level keys
+# ("field not found"), so the list is repeated verbatim under each entryPoint.
+# Refresh both copies with scripts/update-cf-ips.sh, which also prints the
+# matching TRUSTED_PROXY_IPS line for .env.
+# Cloudflare, fetched 2026-08-11.
+
 entryPoints:
   web:
     address: ":80"
+    forwardedHeaders:
+      trustedIPs:
+        - "173.245.48.0/20"
+        - "103.21.244.0/22"
+        - "103.22.200.0/22"
+        - "103.31.4.0/22"
+        - "141.101.64.0/18"
+        - "108.162.192.0/18"
+        - "190.93.240.0/20"
+        - "188.114.96.0/20"
+        - "197.234.240.0/22"
+        - "198.41.128.0/17"
+        - "162.158.0.0/15"
+        - "104.16.0.0/13"
+        - "104.24.0.0/14"
+        - "172.64.0.0/13"
+        - "131.0.72.0/22"
+        - "2400:cb00::/32"
+        - "2606:4700::/32"
+        - "2803:f800::/32"
+        - "2405:b500::/32"
+        - "2405:8100::/32"
+        - "2a06:98c0::/29"
+        - "2c0f:f248::/32"
     http:
       redirections:
         entryPoint:
@@ -20,6 +63,31 @@ entryPoints:
 
   websecure:
     address: ":443"
+    # Same list as the `web` entryPoint above - keep the two in sync.
+    forwardedHeaders:
+      trustedIPs:
+        - "173.245.48.0/20"
+        - "103.21.244.0/22"
+        - "103.22.200.0/22"
+        - "103.31.4.0/22"
+        - "141.101.64.0/18"
+        - "108.162.192.0/18"
+        - "190.93.240.0/20"
+        - "188.114.96.0/20"
+        - "197.234.240.0/22"
+        - "198.41.128.0/17"
+        - "162.158.0.0/15"
+        - "104.16.0.0/13"
+        - "104.24.0.0/14"
+        - "172.64.0.0/13"
+        - "131.0.72.0/22"
+        - "2400:cb00::/32"
+        - "2606:4700::/32"
+        - "2803:f800::/32"
+        - "2405:b500::/32"
+        - "2405:8100::/32"
+        - "2a06:98c0::/29"
+        - "2c0f:f248::/32"
     transport:
       respondingTimeouts:
         # Long enough for large uploads on the `waf-uploads` chain. A long

@@ -62,6 +62,34 @@ A more specific router (e.g. `Host(...) && PathPrefix('/upload')`) **must set an
 - Never `ctl:ruleEngine=Off` — kills protection *and* logging. `DetectionOnly` is the escape hatch.
 - Default paranoia is 2; PL3 rejects newlines in input (920272) and tends to get switched off wholesale.
 
+## Behind a CDN (Cloudflare)
+
+Three changes that are only correct together — see README "Behind Cloudflare".
+
+- `forwardedHeaders.trustedIPs` on both entryPoints, literal in `traefik.yaml`
+  (no env expansion; no YAML anchor either — Traefik rejects unknown top-level
+  keys). `TRUSTED_PROXY_IPS` in `.env` feeds the same list to
+  `ipStrategy.excludedIPs` on `ratelimit`/`inflight`. Both empty by default.
+- **`excludedIPs`, never `depth=1`.** One gateway fronts both proxied and
+  directly-resolving hostnames; `excludedIPs` is correct for both, `depth` reads
+  an attacker-supplied header on the direct ones.
+- **Trusting the CDN breaks the `X-Forwarded-Host` guarantee** the WAF
+  exclusions rest on, because a client-supplied value now survives. Every router
+  must stamp its own literal via an `xfh-` middleware placed before `waf@docker`.
+  A literal cannot cover two names, so **a multi-hostname service needs one
+  router per hostname** sharing one service, with an explicit `.service=`.
+- `scripts/update-cf-ips.sh` rewrites both `traefik.yaml` blocks and prints the
+  `.env` line; `--check` for CI. Static config needs `make restart`.
+
+## Migrating off certbot
+
+`HOST_CERT_STORE` mounts a host `/etc/letsencrypt` read-only at
+`/letsencrypt-host`; serve those certs from `traefik/dynamic/` with no
+`certresolver` on the routers, so the cutover involves no ACME and rollback is
+instant. Mount the whole tree — `live/` symlinks into `archive/`. Switch to
+`certresolver=letsencrypt` and disable the host's certbot timer as a separate,
+later step; a live `--nginx` authenticator will fight Traefik for port 80.
+
 ## CORS
 
 A WAF 403 carries no `Access-Control-Allow-Origin`, so browsers report it as a CORS error and hide the real cause — the most common misdiagnosis in this stack. Three mechanisms: `cors` runs before the WAF and Traefik answers preflight without forwarding it; `CORS_HEADER_403_*` puts CORS headers on WAF blocks (the plugin copies them through); `ALLOWED_METHODS` includes PUT/PATCH/DELETE, which CRS 911100 rejects by default (`GET HEAD POST OPTIONS`).

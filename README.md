@@ -129,6 +129,96 @@ Three mechanisms handle it:
 Set `CORS_ALLOW_ORIGIN` to explicit origins in production; `*` cannot be
 combined with credentialed requests.
 
+## Behind Cloudflare
+
+If a CDN fronts this gateway, every request arrives from the CDN's edge IPs.
+Left alone, `ratelimit` and `inflight` count all of them as **one** source, so a
+single edge's worth of real visitors shares one 100 req/s budget and legitimate
+traffic gets throttled. Fixing it takes three changes that only work together.
+
+**1. Trust the proxy** — `forwardedHeaders.trustedIPs` on both entryPoints in
+`traefik/traefik.yaml`. Traefik keeps `X-Forwarded-*` from a trusted peer and
+rewrites it for everyone else. Static config cannot expand env vars, so the list
+is literal, and a YAML anchor does not work either (Traefik rejects unknown
+top-level keys with `field not found`) — hence the same list twice.
+
+**2. Count the real client** — `TRUSTED_PROXY_IPS` in `.env` feeds
+`ipStrategy.excludedIPs` on `ratelimit` and `inflight`. Traefik walks
+`X-Forwarded-For` from the right and takes the first address that is not a
+listed proxy.
+
+Use `excludedIPs`, **not** `depth=1`. One gateway usually fronts a mix of
+proxied and directly-resolving hostnames. `excludedIPs` is right for both — the
+true client for proxied traffic, the socket address for direct traffic —
+whereas `depth=1` would read an attacker-supplied header on the direct
+hostnames. Both are empty by default, which Traefik treats as plain
+`RemoteAddr`, so none of this is active unless you opt in.
+
+**3. Pin `X-Forwarded-Host` per router — do not skip this.** Steps 1 and 2 alone
+open a hole. Host-scoped WAF rules match `X-Forwarded-Host` (the WAF only ever
+sees `Host: modsecurity:8080`), and that was safe *because* Traefik overwrote
+client-supplied `X-Forwarded-*`. Once the CDN is trusted, a header a client
+sends **to the CDN** is relayed and kept — so anyone could send
+`X-Forwarded-Host: <a-host-with-an-exclusion>` to any proxied hostname and
+inherit that host's exemptions. Every router must stamp its own value, ahead of
+the WAF in the chain:
+
+```yaml
+- "traefik.http.middlewares.xfh-myapp.headers.customrequestheaders.X-Forwarded-Host=app.example.com"
+- "traefik.http.routers.myapp.middlewares=xfh-myapp@docker,waf@docker"
+```
+
+Because that value is a literal, **one router cannot serve two hostnames**. A
+service answering on several names needs one router *per* name, each with its
+own `xfh-` middleware, all pointing at one shared service — and `.service=`
+becomes mandatory once a container has more than one router:
+
+```yaml
+- "traefik.http.services.myapp.loadbalancer.server.port=8080"
+
+- "traefik.http.routers.myapp-1.rule=Host(`app.example.com`)"
+- "traefik.http.routers.myapp-1.service=myapp"
+- "traefik.http.middlewares.xfh-myapp-1.headers.customrequestheaders.X-Forwarded-Host=app.example.com"
+- "traefik.http.routers.myapp-1.middlewares=xfh-myapp-1@docker,waf@docker"
+
+- "traefik.http.routers.myapp-2.rule=Host(`www.example.com`)"
+- "traefik.http.routers.myapp-2.service=myapp"
+- "traefik.http.middlewares.xfh-myapp-2.headers.customrequestheaders.X-Forwarded-Host=www.example.com"
+- "traefik.http.routers.myapp-2.middlewares=xfh-myapp-2@docker,waf@docker"
+```
+
+Refresh the ranges with `./scripts/update-cf-ips.sh` (`--check` in CI). It
+rewrites both blocks in `traefik.yaml` and prints the `.env` line. Static config
+needs `make restart`, not a reload.
+
+Verify it works with two checks: the access log must show real client IPs rather
+than edge IPs, and a request carrying a forged `X-Forwarded-Host` plus an attack
+payload must still be blocked.
+
+## Migrating off an existing certbot host
+
+Cutting over from nginx/Apache on a box that already has certbot certificates
+does not need ACME at all. Point `HOST_CERT_STORE` at the host's
+`/etc/letsencrypt` (mounted read-only at `/letsencrypt-host`) and serve those
+certs through the file provider:
+
+```yaml
+# traefik/dynamic/certs.yaml
+tls:
+  certificates:
+    - certFile: /letsencrypt-host/live/example.com/fullchain.pem
+      keyFile:  /letsencrypt-host/live/example.com/privkey.pem
+```
+
+Leave `certresolver` off the routers while this is in effect. The cutover then
+carries no ACME risk, and rollback is instant because certbot's files are
+untouched. Mount the whole tree — `live/` is symlinks into `archive/`.
+
+Hand renewals to Traefik as a **separate** change once traffic is stable: set
+`certresolver=letsencrypt`, then disable the host's certbot timer/cron. Leaving
+certbot's `--nginx` authenticator armed after nginx stops is a live trap; it can
+fail, or try to start nginx and fight Traefik for port 80.
+
 ## What this does and does not stop
 
 Handled here:
