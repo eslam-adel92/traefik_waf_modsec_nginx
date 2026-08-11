@@ -90,6 +90,28 @@ instant. Mount the whole tree — `live/` symlinks into `archive/`. Switch to
 `certresolver=letsencrypt` and disable the host's certbot timer as a separate,
 later step; a live `--nginx` authenticator will fight Traefik for port 80.
 
+**Handing renewals back to ACME: file certs suppress ACME.** Setting
+`certresolver=letsencrypt` on every router is **not enough**. Traefik skips ACME
+for any domain already covered by a certificate in its store, so while a
+`tls.certificates` entry covers the host, `acme.json` stays **empty** — no error,
+no warning. It looks correct until the borrowed certs expire, then every host
+fails at once.
+
+Retiring the file certs is what triggers issuance. Order matters:
+
+1. Set `certresolver` on **every** router first — a router without one has no
+   certificate at all once the file certs go, and serves Traefik's self-signed
+   cert (a `526` behind Cloudflare).
+2. Confirm via `/api/http/routers` that every router reports `certResolver`.
+3. Only then remove `traefik/dynamic/certs.yaml`. Issuance is quick — 14 hosts
+   took under 25 seconds — but there is a brief window where uncovered hosts
+   serve the self-signed cert, so do it at a low-traffic time.
+4. Verify the **served** certificate changed (`openssl s_client` → `notBefore`
+   should be today), not just that `acme.json` has entries.
+
+Do not keep the retired file around where it can be dropped back in: restoring
+it silently re-suppresses renewals.
+
 ## `DetectionOnly` does not cover the phase-1 custom rules
 
 `ctl:ruleEngine=DetectionOnly` in `site-rules.conf` is a **phase 1** rule, and
