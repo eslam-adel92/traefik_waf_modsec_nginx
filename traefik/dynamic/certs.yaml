@@ -1,0 +1,17 @@
+# Phase 4 cutover: serve the certificates certbot already issued on this host,
+# read-only from /letsencrypt-host. No ACME runs during the cutover, so a
+# challenge cannot fail at the worst possible moment, and rollback to nginx is
+# instant because certbot's own files are never touched.
+#
+# Routers therefore carry cert_resolver="" (see each app's docker-files/.env).
+# Phase 5 switches them to letsencrypt and retires this file.
+#
+# live/ is symlinks into archive/, which is why the whole tree is mounted.
+tls:
+  certificates:
+    # 13-SAN cert: every host except dirisha. Expires 2026-10-07.
+    - certFile: /letsencrypt-host/live/aurora-rom-db.bdaiat.com/fullchain.pem
+      keyFile: /letsencrypt-host/live/aurora-rom-db.bdaiat.com/privkey.pem
+    # Expires 2026-10-19.
+    - certFile: /letsencrypt-host/live/dirisha-test.alromansiah.com/fullchain.pem
+      keyFile: /letsencrypt-host/live/dirisha-test.alromansiah.com/privkey.pem

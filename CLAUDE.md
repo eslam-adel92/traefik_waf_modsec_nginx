@@ -90,6 +90,36 @@ instant. Mount the whole tree — `live/` symlinks into `archive/`. Switch to
 `certresolver=letsencrypt` and disable the host's certbot timer as a separate,
 later step; a live `--nginx` authenticator will fight Traefik for port 80.
 
+## `DetectionOnly` does not cover the phase-1 custom rules
+
+`ctl:ruleEngine=DetectionOnly` in `site-rules.conf` is a **phase 1** rule, and
+`site-after.conf` loads **after** `custom-after.conf`. Within a phase, rules run
+in load order — so the phase-1 rules in `custom-rules.conf` (1200 dotfiles, 1201
+manifests, 1202 backups, 1203 status pages, 1211, 1212, 1220, 1231, 1240) have
+already run `deny` before the `ctl` takes effect, and **still block**. Only
+phase-2 rules — the CRS 942xxx SQLi family, 941 XSS, the `ARGS`-based custom
+rules 1210/1230 — actually observe it.
+
+Verified on a live deployment: a `DetectionOnly` host returned 200 for an SQLi
+probe (logged, not blocked) while still returning 403 for `/.env`,
+`/.git/config` and `/composer.json`.
+
+Usually this is what you want — an exempted admin tool has no business serving
+`/.env` either. But do not describe such a host as "WAF off": it is exempt from
+the phase-2 rules only. To exempt a phase-1 custom rule for one host, use a
+scoped `ctl:ruleRemoveById=1200` **in `custom-rules.conf` itself**, where it can
+run before the rule it targets.
+
+## Reading WAF decisions in a script
+
+Two traps when asserting on `docker logs modsecurity`:
+
+- ModSecurity's rule messages go to the container's **stderr** (nginx
+  `error_log`). `2>/dev/null` silently discards exactly the lines you want.
+- Piping into `grep -q` under `set -o pipefail` reports failure even on a match:
+  `grep -q` exits at the first hit, `docker logs` takes SIGPIPE, and the
+  pipeline's status becomes 141. Capture into a variable first, then match.
+
 ## CORS
 
 A WAF 403 carries no `Access-Control-Allow-Origin`, so browsers report it as a CORS error and hide the real cause — the most common misdiagnosis in this stack. Three mechanisms: `cors` runs before the WAF and Traefik answers preflight without forwarding it; `CORS_HEADER_403_*` puts CORS headers on WAF blocks (the plugin copies them through); `ALLOWED_METHODS` includes PUT/PATCH/DELETE, which CRS 911100 rejects by default (`GET HEAD POST OPTIONS`).
