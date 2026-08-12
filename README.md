@@ -129,6 +129,51 @@ Three mechanisms handle it:
 Set `CORS_ALLOW_ORIGIN` to explicit origins in production; `*` cannot be
 combined with credentialed requests.
 
+### When the application already handles CORS
+
+**Drop `cors@docker` from the chain.** Traefik's CORS middleware does not merge
+with the application's headers — it **replaces** them, and the replacement is
+almost always narrower.
+
+A Laravel/Express/Django app that correctly reflects the caller's origin and
+allows its own custom headers:
+
+```
+Access-Control-Allow-Origin: https://app.example.com
+Access-Control-Allow-Headers: content-type, Authorization, applicationId, platform, Idempotency-Key
+```
+
+comes out of the gateway as:
+
+```
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Headers: Content-Type,Authorization,X-Requested-With,X-CSRF-TOKEN,X-XSRF-TOKEN
+```
+
+Every request carrying one of the app's own headers now fails preflight, and
+`*` breaks anything using cookies or `credentials: "include"`. The browser
+reports a CORS error with nothing pointing at the gateway — the failing request
+just shows its referrer policy, which is what usually gets reported as "the
+error".
+
+```bash
+# .env
+WAF_CHAIN=ratelimit@docker,inflight@docker,compress@docker,modsecurity@docker,securityHeaders@docker
+WAF_UPLOADS_CHAIN=ratelimit@docker,inflight-uploads@docker,compress@docker,modsecurity-large@docker,securityHeaders@docker
+```
+
+Safe as long as `OPTIONS` stays in `ALLOWED_METHODS`, so the preflight reaches
+the app rather than being stopped by CRS 911100. Keep `cors@docker` only for
+apps that send no CORS headers at all.
+
+Diagnose it in one command — compare what the app sends against what the client
+receives:
+
+```bash
+curl -sI -H 'Origin: https://app.example.com' http://127.0.0.1:<app-port>/api/x | grep -i access-control
+curl -sI -H 'Origin: https://app.example.com' https://app.example.com/api/x   | grep -i access-control
+```
+
 ## Behind Cloudflare
 
 If a CDN fronts this gateway, every request arrives from the CDN's edge IPs.

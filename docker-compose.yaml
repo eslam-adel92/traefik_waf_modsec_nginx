@@ -52,10 +52,15 @@ services:
       # An application opts in with a single label:
       #     traefik.http.routers.<name>.middlewares=waf@docker
       # =====================================================================
-      - "traefik.http.middlewares.waf.chain.middlewares=ratelimit@docker,inflight@docker,compress@docker,cors@docker,modsecurity@docker,securityHeaders@docker"
+      # The chain is overridable so a deployment can drop a link it does not
+      # want. The usual one is `cors@docker`: an application that already sets
+      # its own CORS headers has them OVERWRITTEN by this middleware, which
+      # silently narrows what the browser will allow. See .env.example and
+      # README "When the application already handles CORS".
+      - "traefik.http.middlewares.waf.chain.middlewares=${WAF_CHAIN:-ratelimit@docker,inflight@docker,compress@docker,cors@docker,modsecurity@docker,securityHeaders@docker}"
       # For large-upload routes: same protection, bigger body budget, much
       # tighter concurrency. See README "Large uploads".
-      - "traefik.http.middlewares.waf-uploads.chain.middlewares=ratelimit@docker,inflight-uploads@docker,compress@docker,cors@docker,modsecurity-large@docker,securityHeaders@docker"
+      - "traefik.http.middlewares.waf-uploads.chain.middlewares=${WAF_UPLOADS_CHAIN:-ratelimit@docker,inflight-uploads@docker,compress@docker,cors@docker,modsecurity-large@docker,securityHeaders@docker}"
 
       # ---- L7 flood control ----------------------------------------------
       # Ordered FIRST in the chains above so floods are dropped before paying
