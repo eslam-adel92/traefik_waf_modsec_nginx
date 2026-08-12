@@ -112,6 +112,34 @@ Retiring the file certs is what triggers issuance. Order matters:
 Do not keep the retired file around where it can be dropped back in: restoring
 it silently re-suppresses renewals.
 
+## CRS 931130 can never be satisfied here
+
+`931130` ("RFI: Off-Domain Reference/Link") is chained on:
+
+```
+SecRule TX:/rfi_parameter_.*/ "!@endsWith .%{request_headers.host}"
+```
+
+The plugin opens its **own** connection to the WAF, so `request_headers.host` is
+always `modsecurity:8080`. No real URL ends with that, so the negated match is
+always true: **every url-bearing parameter scores CRITICAL**, including an
+application's own links.
+
+One URL scores 5 against a threshold of 10, so ordinary pages look fine — which
+is what makes this hard to spot. It surfaces on requests carrying *several*
+URLs. Observed live: payment webhooks whose JSON bodies held 6–10 URL fields
+scored 40–50 and were 403'd, so payment confirmations failed intermittently.
+
+Scope the rule off the affected routes rather than removing it globally — it
+still does real work through the other RFI rules' scoring. Verified: dropping it
+everywhere takes `?f=php://input` from 403 to 200.
+
+```
+SecRule REQUEST_HEADERS:X-Forwarded-Host "@rx (?i)^api\.example\.com$" \
+    "id:5120,phase:1,pass,nolog,ctl:ruleRemoveById=931130,chain"
+    SecRule REQUEST_URI "@rx (?i)^/api/v[0-9]+/webhooks?/"
+```
+
 ## `DetectionOnly` does not cover the phase-1 custom rules
 
 `ctl:ruleEngine=DetectionOnly` in `site-rules.conf` is a **phase 1** rule, and
