@@ -103,7 +103,8 @@ Retiring the file certs is what triggers issuance. Order matters:
    certificate at all once the file certs go, and serves Traefik's self-signed
    cert (a `526` behind Cloudflare).
 2. Confirm via `/api/http/routers` that every router reports `certResolver`.
-3. Only then remove `traefik/dynamic/certs.yaml`. Issuance is quick — 14 hosts
+3. Only then remove `traefik/dynamic/certs.yaml` (the live copy, made from
+   `certs.yaml.example` and gitignored). Issuance is quick — 14 hosts
    took under 25 seconds — but there is a brief window where uncovered hosts
    serve the self-signed cert, so do it at a low-traffic time.
 4. Verify the **served** certificate changed (`openssl s_client` → `notBefore`

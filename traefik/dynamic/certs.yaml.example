@@ -1,3 +1,17 @@
+# TEMPLATE - not loaded. Copy to certs.yaml only on a host that is actually
+# migrating off a certbot box, and replace every path below with that host's own.
+#
+# Why this ships as .example: traefik.yaml runs a file provider over this whole
+# directory (providers.file.directory=/etc/traefik/dynamic, watch: true), so any
+# *.yaml here is loaded verbatim on every deployment that pulls this repo. A
+# committed certs.yaml therefore pushes ONE host's certificate paths onto ALL of
+# them - where those files do not exist, and where, per "Handing renewals back to
+# ACME" in CLAUDE.md, a tls.certificates entry SILENTLY SUPPRESSES ACME issuance:
+# acme.json stays empty with no error until the certs expire and every host fails
+# at once. Deployments using Traefik's own certresolver must never load this.
+#
+# The paths below are from the bdaiat/alromansiah cutover and are examples only.
+
 # Phase 4 cutover: serve the certificates certbot already issued on this host,
 # read-only from /letsencrypt-host. No ACME runs during the cutover, so a
 # challenge cannot fail at the worst possible moment, and rollback to nginx is

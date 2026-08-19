@@ -4,6 +4,11 @@
 # Site-specific WAF rules (real hostnames) - keep out of the public template
 modsec/site-rules.conf
 
+# Per-host cutover certs. The file provider loads every *.yaml in this directory,
+# so a committed one would push one host's certificate paths onto every
+# deployment AND silently suppress ACME there. Copy certs.yaml.example instead.
+traefik/dynamic/certs.yaml
+
 # ACME account + certificates
 traefik/letsencrypt/*
 !traefik/letsencrypt/.gitkeep

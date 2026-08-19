@@ -248,7 +248,7 @@ does not need ACME at all. Point `HOST_CERT_STORE` at the host's
 certs through the file provider:
 
 ```yaml
-# traefik/dynamic/certs.yaml
+# traefik/dynamic/certs.yaml   (copied from certs.yaml.example; gitignored)
 tls:
   certificates:
     - certFile: /letsencrypt-host/live/example.com/fullchain.pem
